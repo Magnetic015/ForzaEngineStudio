@@ -162,7 +162,15 @@ def main() -> int:
                 target = fes_assist.simplify_for_render(target, alpha_mask, levels=args.assist_levels)
                 assist_meta["simplify"] = {"levels": int(args.assist_levels)}
             if args.assist_base or args.base_image:
-                if args.base_image:
+                # The hybrid base is intentionally skipped in sticker mode: the
+                # JSON carries no per-pixel silhouette alpha, so an Import-JSON
+                # reload (which composites shapes over a transparent backdrop)
+                # could not reproduce a base-seeded RGBA result. Simplify +
+                # importance still apply and stay fully reproducible because the
+                # output is shapes only.
+                if args.sticker:
+                    emit({"type": "log", "message": "hybrid base skipped in sticker mode (keeps Import-JSON reproducible)"})
+                elif args.base_image:
                     base_canvas = fes_assist.base_canvas_from_image(args.base_image, (h, w), alpha_mask)
                     assist_meta["base"] = {"source": "external"}
                 else:
@@ -229,11 +237,10 @@ def main() -> int:
                 src = Path(args.image)
                 out_path = Path(args.out) if args.out else src.with_name(src.stem + "_engine.json")
                 # Persist the hybrid under-paint so an Import-JSON reload paints
-                # the shapes over the same seed. Skipped in sticker mode (the
-                # reload path renders on transparency, ignoring the base).
-                base_b64 = ""
-                if base_canvas is not None and not args.sticker:
-                    base_b64 = encode_png(base_canvas)
+                # the shapes over the same seed. base_canvas is only ever set in
+                # non-sticker runs (sticker seeding is skipped above for
+                # reproducibility), so this is implicitly non-sticker.
+                base_b64 = encode_png(base_canvas) if base_canvas is not None else ""
                 try:
                     doc = FD6Document.from_engine(
                         source_image=src.name,
