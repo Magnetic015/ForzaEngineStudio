@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor / tooling directories and files
+.vscode/*
+!.vscode/extensions.json
+.claude/
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python engine sidecar
+python/.venv
+__pycache__/
+*.pyc
+
+# Engine output (generated next to the source image)
+*_engine.json
+*_ai.png
+
+# Secrets & credentials — never commit API keys, tokens, certs, or private keys
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+*.keystore
+id_rsa
+id_rsa.*
+*.ppk
+secrets.*
+credentials.json
