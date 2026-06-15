@@ -34,6 +34,12 @@
               <option value="auto">自动</option>
             </select>
           </label>
+          <label class="field" title="用图像模型协助渲染：压平色块 + 底图打底 + 显著性引导，更少图层、更高精细度">模型协助
+            <select id="assist-mode">
+              <option value="off" selected>关闭</option>
+              <option value="on">开启（减少图层 · 增精细度）</option>
+            </select>
+          </label>
           <span id="backend" class="backend"></span>
           <span class="spacer"></span>
           <button id="import-json-btn" class="btn">导入 JSON</button>
