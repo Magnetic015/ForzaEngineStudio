@@ -35,6 +35,21 @@ from pathlib import Path
 import requests
 from PIL import Image
 
+# Single source of truth for the render-optimization instruction lives next to
+# the engine's local assist primitives; fall back to an inline copy if the fd6
+# package isn't importable from this standalone sidecar's launch context.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from fd6.shapegen.assist import render_optimize_prompt as _render_optimize_prompt
+except Exception:  # pragma: no cover - defensive fallback
+    def _render_optimize_prompt(levels=None):
+        return (
+            "Redraw this image as a clean, flat poster-style illustration: flatten "
+            "smooth areas into large flat color regions, remove noise and gradients, "
+            "but keep important edges and small high-contrast details crisp. Preserve "
+            "the composition, colors and subject exactly; add nothing new."
+        )
+
 # Windows pipes default to the locale code page (e.g. GBK), which corrupts
 # non-ASCII paths (Chinese filenames) when Rust decodes stdout as UTF-8.
 # Force UTF-8 so the emitted JSON survives the round-trip intact.
@@ -197,11 +212,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True)
     ap.add_argument("--api-key", required=True)
-    ap.add_argument("--prompt", required=True)
+    ap.add_argument("--prompt", default="")
     ap.add_argument("--model", default="plus/gpt-image-2")
     ap.add_argument("--base-url", default="https://your-gateway.example/v1")
     ap.add_argument("--out", default="")
+    # "render-optimize" asks the model to flatten the image for fewer-layer,
+    # higher-fidelity shape rendering. When set, it supplies/prefixes the prompt.
+    ap.add_argument("--preset", default="", choices=["", "render-optimize"])
+    ap.add_argument("--levels", type=int, default=0, help="hint a flat-color count for the preset")
     args = ap.parse_args()
+
+    prompt = args.prompt.strip()
+    if args.preset == "render-optimize":
+        preset_prompt = _render_optimize_prompt(args.levels or None)
+        prompt = f"{preset_prompt} {prompt}".strip() if prompt else preset_prompt
+    if not prompt:
+        emit({"type": "error", "message": "no prompt: pass --prompt or --preset render-optimize"})
+        return 1
+    args.prompt = prompt
 
     src = Path(args.image)
     if not src.exists():

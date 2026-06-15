@@ -230,7 +230,28 @@ class Engine:
     Python's GIL.
     """
 
-    def __init__(self, target_rgb: np.ndarray, config: EngineConfig, alpha_mask: np.ndarray | None = None) -> None:
+    def __init__(
+        self,
+        target_rgb: np.ndarray,
+        config: EngineConfig,
+        alpha_mask: np.ndarray | None = None,
+        base_canvas: np.ndarray | None = None,
+        importance_map: np.ndarray | None = None,
+    ) -> None:
+        """Image → shapes generator.
+
+        Optional model-assist hooks (see ``fd6.shapegen.assist``):
+
+        * ``base_canvas`` (H×W×3 uint8) — a low-frequency under-paint to seed
+          the canvas with instead of a flat average. Ellipses then only correct
+          the residual high-frequency detail, so the same fidelity is reached
+          with fewer layers ("hybrid base"). Defaults preserve the original
+          flat-average / grey-buffer start.
+        * ``importance_map`` (H×W float32) — replaces the built-in Sobel
+          edge-weight used to bias shape placement, letting a saliency/structure
+          map concentrate the layer budget on detail. None → unchanged Sobel
+          behaviour.
+        """
         if target_rgb.ndim != 3 or target_rgb.shape[2] != 3:
             raise ValueError("target_rgb must be HxWx3 RGB uint8")
         self.target = target_rgb.astype(np.uint8)
@@ -245,6 +266,19 @@ class Engine:
         else:
             avg = self.target.reshape(-1, 3).mean(axis=0).astype(np.uint8)
             initial_canvas = np.tile(avg, (self.h, self.w, 1)).astype(np.uint8)
+
+        # Hybrid base: seed the canvas from a supplied under-paint so the search
+        # starts close to the target and spends its layers on detail. In sticker
+        # mode force the buffer region back to grey 40 so the seed obeys the same
+        # transparent-outside convention the rest of the engine assumes.
+        if base_canvas is not None:
+            base = np.ascontiguousarray(base_canvas).astype(np.uint8)
+            if base.shape != (self.h, self.w, 3):
+                raise ValueError("base_canvas must match target as HxWx3 uint8")
+            if self.alpha_mask is not None:
+                mask3 = (self.alpha_mask > 0)[:, :, None]
+                base = np.where(mask3, base, 40).astype(np.uint8)
+            initial_canvas = base
 
         # Allocate the shared canvas. Workers attach to this same buffer by name.
         self._canvas_shm: shared_memory.SharedMemory | None = shared_memory.SharedMemory(
@@ -262,7 +296,15 @@ class Engine:
         # `edge_weight` shared-memory buffer starts at the base and is
         # periodically reblended with the residual error map below so unfinished
         # regions get boosted late in generation.
-        self._base_edge_weight: np.ndarray = compute_edge_weight(self.target, self.alpha_mask).astype(np.float32)
+        if importance_map is not None:
+            imp = np.ascontiguousarray(importance_map).astype(np.float32)
+            if imp.shape != (self.h, self.w):
+                raise ValueError("importance_map must be HxW float matching the target")
+            if self.alpha_mask is not None:
+                imp = imp * (self.alpha_mask > 0).astype(np.float32)
+            self._base_edge_weight = imp
+        else:
+            self._base_edge_weight = compute_edge_weight(self.target, self.alpha_mask).astype(np.float32)
         self._edge_weight_shm: shared_memory.SharedMemory | None = shared_memory.SharedMemory(
             create=True, size=self._base_edge_weight.nbytes,
         )

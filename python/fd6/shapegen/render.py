@@ -37,6 +37,7 @@ def _is_stickerlike(shapes: list[Shape]) -> bool:
 def render_shapes(
     shapes: list[Shape], width: int, height: int,
     background=(255, 255, 255), transparent_bg: bool = False,
+    base: np.ndarray | None = None,
 ) -> np.ndarray:
     """Composite all shapes (in order) onto a fresh canvas.
 
@@ -44,6 +45,11 @@ def render_shapes(
     `transparent_bg=True`. RGBA mode is used when reloading a sticker-mode
     JSON so the preview pane shows true transparency outside the painted
     silhouette instead of a solid white rectangle.
+
+    `base` (H, W, 3 uint8) is the hybrid under-paint the engine seeded its
+    canvas with: when present the shapes are composited over it (instead of a
+    flat `background`) so the reloaded preview reproduces what the engine
+    actually produced. Ignored in `transparent_bg` mode.
     """
     if transparent_bg:
         # Sticker preview path: paint shapes onto a neutral grey backdrop
@@ -68,7 +74,9 @@ def render_shapes(
             alpha[y0:y1, x0:x1] = np.maximum(alpha[y0:y1, x0:x1], mask_local)
         return np.dstack([canvas, alpha])
 
-    if background == "auto":
+    if base is not None and base.shape[:2] == (height, width):
+        canvas = np.ascontiguousarray(base[:, :, :3]).astype(np.uint8).copy()
+    elif background == "auto":
         canvas = _checkerboard(width, height) if _is_stickerlike(shapes) \
                  else np.full((height, width, 3), 255, dtype=np.uint8)
     else:

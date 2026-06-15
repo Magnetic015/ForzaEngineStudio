@@ -27,6 +27,14 @@ class FD6Document:
     # how the GUI re-renders the preview on Upload JSON: sticker JSONs get a
     # transparent preview, non-sticker JSONs get a white canvas as before.
     sticker_mode: bool = False
+    # Model-assist metadata (v0.5+). Empty / absent on non-assisted documents.
+    # `base_image` is the hybrid under-paint the engine seeded its canvas with,
+    # stored as a base64-encoded PNG so the JSON renders back exactly as the
+    # engine produced it (shapes composited over the base). `assist` records
+    # which assists ran for provenance/debugging. Both default empty so older
+    # JSONs (and shape-only Forza exports) load unchanged.
+    base_image: str = ""
+    assist: dict = field(default_factory=dict)
     shapes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -52,6 +60,8 @@ class FD6Document:
             generated_at=str(data.get("generated_at", "")),
             profile=str(data.get("profile", "")),
             sticker_mode=bool(data.get("sticker_mode", False)),
+            base_image=str(data.get("base_image", "") or ""),
+            assist=dict(data.get("assist", {}) or {}),
             shapes=list(data.get("shapes", [])),
         )
 
@@ -66,6 +76,8 @@ class FD6Document:
         shapes: Iterable[Shape],
         profile_name: str = "",
         sticker_mode: bool = False,
+        base_image: str = "",
+        assist: dict | None = None,
     ) -> "FD6Document":
         shape_list = [s.to_json() for s in shapes]
         return cls(
@@ -77,5 +89,7 @@ class FD6Document:
             generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             profile=profile_name,
             sticker_mode=sticker_mode,
+            base_image=base_image or "",
+            assist=dict(assist or {}),
             shapes=shape_list,
         )
