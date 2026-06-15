@@ -157,9 +157,15 @@ def main() -> int:
     importance_map = None
     assist_meta: dict = {}
     if use_assist:
+        # Build every assist against a working copy and only commit it to
+        # `target` after ALL enabled assists succeed. Otherwise a later failure
+        # (e.g. a bad external --base-image) would leave `target` already
+        # simplified while the except-path reports a plain fallback — rendering
+        # a silently posterized/recolored image with no assist metadata.
+        assisted_target = target
         try:
             if args.assist_simplify:
-                target = fes_assist.simplify_for_render(target, alpha_mask, levels=args.assist_levels)
+                assisted_target = fes_assist.simplify_for_render(target, alpha_mask, levels=args.assist_levels)
                 assist_meta["simplify"] = {"levels": int(args.assist_levels)}
             if args.assist_base or args.base_image:
                 # The hybrid base is intentionally skipped in sticker mode: the
@@ -174,18 +180,20 @@ def main() -> int:
                     base_canvas = fes_assist.base_canvas_from_image(args.base_image, (h, w), alpha_mask)
                     assist_meta["base"] = {"source": "external"}
                 else:
-                    base_canvas = fes_assist.build_base_canvas(target, alpha_mask, levels=args.assist_levels)
+                    base_canvas = fes_assist.build_base_canvas(assisted_target, alpha_mask, levels=args.assist_levels)
                     assist_meta["base"] = {"source": "local"}
             if args.assist_importance or args.importance_map:
                 if args.importance_map:
                     importance_map = fes_assist.importance_from_image(args.importance_map, (h, w), alpha_mask)
                     assist_meta["importance"] = {"source": "external"}
                 else:
-                    importance_map = fes_assist.saliency_importance(target, alpha_mask)
+                    importance_map = fes_assist.saliency_importance(assisted_target, alpha_mask)
                     assist_meta["importance"] = {"source": "local"}
+            # All enabled assists succeeded — now it's safe to adopt the target.
+            target = assisted_target
         except Exception as exc:
             # Assist is best-effort — never block a render over it. Fall back to
-            # the plain pipeline and tell the UI what happened.
+            # the plain pipeline (original `target` untouched) and tell the UI.
             base_canvas = None
             importance_map = None
             assist_meta = {}
