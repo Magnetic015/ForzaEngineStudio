@@ -55,10 +55,19 @@ def main() -> int:
     try:
         w, h = int(doc.image_size[0]), int(doc.image_size[1])
         shapes = doc.materialize_shapes()
+        # Hybrid-base documents carry the under-paint as a base64 PNG; decode it
+        # so the shapes composite over the same seed the engine used.
+        base = None
+        if getattr(doc, "base_image", ""):
+            try:
+                raw = base64.b64decode(doc.base_image)
+                base = np.asarray(Image.open(io.BytesIO(raw)).convert("RGB"), dtype=np.uint8)
+            except Exception:
+                base = None
         if doc.sticker_mode:
             canvas = render_shapes(shapes, w, h, transparent_bg=True)        # RGBA
         else:
-            canvas = render_shapes(shapes, w, h, background=(40, 40, 40))    # match engine grey buffer
+            canvas = render_shapes(shapes, w, h, background=(40, 40, 40), base=base)  # match engine grey buffer
         mode = "RGBA" if (canvas.ndim == 3 and canvas.shape[2] == 4) else "RGB"
         img = Image.fromarray(np.ascontiguousarray(canvas), mode)
         buf = io.BytesIO()

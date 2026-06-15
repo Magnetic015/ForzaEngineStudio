@@ -38,6 +38,7 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fd6.shapegen import Engine, EngineConfig, Profile  # noqa: E402
+from fd6.shapegen import assist as fes_assist  # noqa: E402
 from fd6.io import FD6Document, save_json  # noqa: E402
 
 
@@ -120,6 +121,23 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
+    # ── Model-assist (fewer layers, more detail). `--assist` turns on all three
+    # assists; each can be toggled off with its --no-* form. External image-model
+    # assets (a flattened under-paint / a saliency map) override the local ones.
+    ap.add_argument("--assist", action="store_true",
+                    help="enable model-assist (render-optimize + hybrid base + saliency guidance)")
+    ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=True,
+                    help="flatten the target into clean flat-color regions before rendering")
+    ap.add_argument("--assist-base", action=argparse.BooleanOptionalAction, default=True,
+                    help="seed the canvas with a low-frequency under-paint (hybrid render)")
+    ap.add_argument("--assist-importance", action=argparse.BooleanOptionalAction, default=True,
+                    help="bias shape placement with a saliency/structure importance map")
+    ap.add_argument("--assist-levels", type=int, default=12,
+                    help="posterize level count for render-optimization / base")
+    ap.add_argument("--base-image", default="",
+                    help="external under-paint image (e.g. an image-model flattened render)")
+    ap.add_argument("--importance-map", default="",
+                    help="external saliency/structure map (grayscale, bright = important)")
     args = ap.parse_args()
 
     try:
@@ -130,6 +148,42 @@ def main() -> int:
 
     h, w = target.shape[:2]
     emit({"type": "meta", "width": int(w), "height": int(h)})
+
+    # ── Build model-assist inputs ────────────────────────────────────────────
+    # Any external asset implies assist even without the master flag. Each piece
+    # degrades to the local numpy approximation when no external asset is given.
+    use_assist = args.assist or bool(args.base_image) or bool(args.importance_map)
+    base_canvas = None
+    importance_map = None
+    assist_meta: dict = {}
+    if use_assist:
+        try:
+            if args.assist_simplify:
+                target = fes_assist.simplify_for_render(target, alpha_mask, levels=args.assist_levels)
+                assist_meta["simplify"] = {"levels": int(args.assist_levels)}
+            if args.assist_base or args.base_image:
+                if args.base_image:
+                    base_canvas = fes_assist.base_canvas_from_image(args.base_image, (h, w), alpha_mask)
+                    assist_meta["base"] = {"source": "external"}
+                else:
+                    base_canvas = fes_assist.build_base_canvas(target, alpha_mask, levels=args.assist_levels)
+                    assist_meta["base"] = {"source": "local"}
+            if args.assist_importance or args.importance_map:
+                if args.importance_map:
+                    importance_map = fes_assist.importance_from_image(args.importance_map, (h, w), alpha_mask)
+                    assist_meta["importance"] = {"source": "external"}
+                else:
+                    importance_map = fes_assist.saliency_importance(target, alpha_mask)
+                    assist_meta["importance"] = {"source": "local"}
+        except Exception as exc:
+            # Assist is best-effort — never block a render over it. Fall back to
+            # the plain pipeline and tell the UI what happened.
+            base_canvas = None
+            importance_map = None
+            assist_meta = {}
+            emit({"type": "log", "message": f"assist disabled ({type(exc).__name__}: {exc})"})
+        if assist_meta:
+            emit({"type": "assist", "applied": assist_meta})
 
     stop_at = max(1, args.stop_at)
     # Frequent preview frames so the canvas visibly fills in from the start.
@@ -147,7 +201,10 @@ def main() -> int:
     )
 
     try:
-        engine = Engine(target, EngineConfig(profile=profile, seed=args.seed), alpha_mask)
+        engine = Engine(
+            target, EngineConfig(profile=profile, seed=args.seed), alpha_mask,
+            base_canvas=base_canvas, importance_map=importance_map,
+        )
     except Exception as exc:
         emit({"type": "error", "message": f"engine init failed: {type(exc).__name__}: {exc}"})
         return 1
@@ -171,6 +228,12 @@ def main() -> int:
             elif ev.kind == "done":
                 src = Path(args.image)
                 out_path = Path(args.out) if args.out else src.with_name(src.stem + "_engine.json")
+                # Persist the hybrid under-paint so an Import-JSON reload paints
+                # the shapes over the same seed. Skipped in sticker mode (the
+                # reload path renders on transparency, ignoring the base).
+                base_b64 = ""
+                if base_canvas is not None and not args.sticker:
+                    base_b64 = encode_png(base_canvas)
                 try:
                     doc = FD6Document.from_engine(
                         source_image=src.name,
@@ -178,6 +241,8 @@ def main() -> int:
                         shapes=engine.shapes,
                         profile_name=profile.name,
                         sticker_mode=args.sticker,
+                        base_image=base_b64,
+                        assist=assist_meta,
                     )
                     save_json(doc, out_path)
                     json_path = str(out_path)

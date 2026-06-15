@@ -210,11 +210,12 @@ async function start() {
   const canvasHeight = parseInt(($("canvas-h") as HTMLInputElement).value || "1000", 10);
   const sticker = (($("sticker-mode") as HTMLSelectElement | null)?.value || "default") === "sticker";
   const backend = ($("backend-select") as HTMLSelectElement | null)?.value || "gpu";
+  const assist = (($("assist-mode") as HTMLSelectElement | null)?.value || "off") === "on";
   setRunning(true);
-  setStatus(`正在启动引擎…（目标图：${selectedCand()?.label || ""}，画布 ${canvasWidth}×${canvasHeight}）`);
+  setStatus(`正在启动引擎…（目标图：${selectedCand()?.label || ""}，画布 ${canvasWidth}×${canvasHeight}${assist ? " · 模型协助" : ""}）`);
   setProgress(0, stopAt, 0);
   try {
-    await invoke("start_generation", { image: src, stopAt, canvasWidth, canvasHeight, sticker, backend });
+    await invoke("start_generation", { image: src, stopAt, canvasWidth, canvasHeight, sticker, backend, assist });
   } catch (e) {
     setStatus("启动失败：" + e);
     setRunning(false);
@@ -255,6 +256,11 @@ function handleEvent(p: any) {
     case "backend": {
       const b = $("backend");
       if (b) b.textContent = "计算后端：" + p.message;
+      break;
+    }
+    case "assist": {
+      const parts = Object.keys(p.applied || {});
+      if (parts.length) setStatus(`模型协助已启用：${parts.join(" · ")} · 生成中…`);
       break;
     }
     case "progress":
