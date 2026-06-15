@@ -35,6 +35,7 @@ fn start_generation(
     canvas_height: u32,
     sticker: bool,
     backend: String,
+    assist: bool,
 ) -> Result<(), String> {
     let py_dir = project_python_dir();
     let script = py_dir.join("sidecar.py");
@@ -56,6 +57,11 @@ fn start_generation(
         .stderr(Stdio::piped());
     if sticker {
         cmd.arg("--sticker");
+    }
+    // Model-assist: render-optimize + hybrid base + saliency guidance (fewer
+    // layers, more detail). The sidecar builds the assist inputs locally.
+    if assist {
+        cmd.arg("--assist");
     }
     #[cfg(windows)]
     {
