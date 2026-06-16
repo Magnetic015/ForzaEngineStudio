@@ -41,6 +41,12 @@ body {
 }
 .field input[type=number] { width: 84px; }
 .field select { width: auto; }
+.field input[type=color] {
+  width: 48px; height: 34px; padding: 2px; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.field.is-disabled { opacity: .4; }
+.field.is-disabled input[type=color] { cursor: not-allowed; }
 .backend { color: var(--muted); font-size: 11px; padding-bottom: var(--space-md); }
 
 .btn {

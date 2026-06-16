@@ -67,7 +67,11 @@ def main() -> int:
         if doc.sticker_mode:
             canvas = render_shapes(shapes, w, h, transparent_bg=True)        # RGBA
         else:
-            canvas = render_shapes(shapes, w, h, background=(40, 40, 40), base=base)  # match engine grey buffer
+            # Default mode: paint over the canvas colour the engine used (the
+            # user's chosen fill). Legacy docs without `background` fall back to
+            # the historical grey 40 so they reload exactly as before.
+            bg = doc.background if doc.background is not None else (40, 40, 40)
+            canvas = render_shapes(shapes, w, h, background=bg, base=base)
         mode = "RGBA" if (canvas.ndim == 3 and canvas.shape[2] == 4) else "RGB"
         img = Image.fromarray(np.ascontiguousarray(canvas), mode)
         buf = io.BytesIO()

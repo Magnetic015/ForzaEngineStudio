@@ -48,6 +48,17 @@ def emit(obj: dict) -> None:
     sys.stdout.flush()
 
 
+def parse_hex_color(value: str) -> tuple[int, int, int]:
+    """'#rrggbb' / 'rrggbb' -> (r, g, b). Falls back to white on bad input."""
+    s = (value or "").strip().lstrip("#")
+    if len(s) == 3:  # short form #rgb
+        s = "".join(ch * 2 for ch in s)
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except (ValueError, IndexError):
+        return (255, 255, 255)
+
+
 def encode_png(canvas: np.ndarray) -> str:
     """uint8 (H,W,3) or (H,W,4) ndarray -> base64-encoded PNG string."""
     mode = "RGBA" if (canvas.ndim == 3 and canvas.shape[2] == 4) else "RGB"
@@ -121,6 +132,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
+    # Default-mode canvas fill colour for the fit-buffer ring (the visible W×H
+    # frame around the image). Ignored in sticker mode (transparency preserved).
+    ap.add_argument("--bg-color", default="#ffffff",
+                    help="default-mode canvas background fill colour, e.g. #ffffff")
     # ── Model-assist (fewer layers, more detail). `--assist` turns on all three
     # assists; each can be toggled off with its --no-* form. External image-model
     # assets (a flattened under-paint / a saliency map) override the local ones.
@@ -148,6 +163,11 @@ def main() -> int:
 
     h, w = target.shape[:2]
     emit({"type": "meta", "width": int(w), "height": int(h)})
+
+    # Default-mode canvas colour: fills the (non-scored) buffer ring so the W×H
+    # frame is visible and the live preview matches an Import-JSON reload. None
+    # in sticker mode keeps the transparent-outside-silhouette preview.
+    preview_background = None if args.sticker else parse_hex_color(args.bg_color)
 
     # ── Build model-assist inputs ────────────────────────────────────────────
     # Any external asset implies assist even without the master flag. Each piece
@@ -220,6 +240,7 @@ def main() -> int:
         engine = Engine(
             target, EngineConfig(profile=profile, seed=args.seed), alpha_mask,
             base_canvas=base_canvas, importance_map=importance_map,
+            preview_background=preview_background,
         )
     except Exception as exc:
         emit({"type": "error", "message": f"engine init failed: {type(exc).__name__}: {exc}"})
@@ -258,6 +279,7 @@ def main() -> int:
                         sticker_mode=args.sticker,
                         base_image=base_b64,
                         assist=assist_meta,
+                        background=preview_background,  # None in sticker mode
                     )
                     save_json(doc, out_path)
                     json_path = str(out_path)
