@@ -14,6 +14,21 @@
   --space-sm: 4px;
 }
 
+/* Map Semi's primary palette onto the app's orange accent so Semi controls
+   (primary buttons, focus rings, active states) match the existing identity.
+   Applied on body, where Semi mounts its colour tokens. */
+/* `html body` (specificity 0,1,2) outranks Semi's own dark palette block
+   `body[theme-mode=dark]` (0,1,1), so the orange accent wins regardless of the
+   order Semi's base.css and this file land in the bundle. */
+html body[theme-mode="dark"] {
+  --semi-color-primary: #f25c2a;
+  --semi-color-primary-hover: #f4703f;
+  --semi-color-primary-active: #d94e20;
+  --semi-color-primary-light-default: rgba(242, 92, 42, 0.16);
+  --semi-color-primary-light-hover: rgba(242, 92, 42, 0.24);
+  --semi-color-focus-border: #f25c2a;
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
@@ -25,6 +40,7 @@ body {
   user-select: none;
 }
 
+#root { height: 100%; }
 .app { display: flex; flex-direction: column; height: 100vh; }
 
 /* ── ① 顶部主功能区 ───────────────────────────────────────── */
@@ -34,13 +50,8 @@ body {
   padding: var(--space-lg);
 }
 .spacer { flex: 1; }
+/* label + control vertical stack */
 .field { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); gap: var(--space-sm); }
-.field input[type=number], .field select, .inp {
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-md); font-size: 13px;
-}
-.field input[type=number] { width: 84px; }
-.field select { width: auto; }
 .field input[type=color] {
   width: 48px; height: 34px; padding: 2px; cursor: pointer;
   background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
@@ -49,18 +60,7 @@ body {
 .field.is-disabled input[type=color] { cursor: not-allowed; }
 .backend { color: var(--muted); font-size: 11px; padding-bottom: var(--space-md); }
 
-.btn {
-  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: var(--space-md) var(--space-lg); cursor: pointer; font-size: 13px;
-}
-.btn:hover:not(:disabled) { border-color: var(--accent); }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
-
 .progress-wrap { padding: 0 var(--space-lg) var(--space-lg); }
-.progress { height: 8px; background: var(--bg); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
-.bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .2s ease; }
 .progress-label { margin-top: var(--space-md); font-size: 12px; color: var(--muted); }
 
 /* ── body: 左右面板（宽度可拖动）─────────────────────────────── */
@@ -122,53 +122,32 @@ body {
   flex: 0 0 158px; border-top: 1px solid var(--border);
 }
 .composer { position: relative; flex: 1 1 auto; min-height: 0; }
-.composer textarea {
-  width: 100%; height: 100%; background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: 13px; font-family: inherit; padding: var(--space-md) 40px var(--space-md) var(--space-md); resize: none;
+/* The send button floats over the bottom-right of the TextArea. */
+.composer .entbtn {
+  position: absolute; right: 8px; bottom: 8px; z-index: 2;
 }
-.composer textarea:focus { outline: none; border-color: var(--accent2); }
-.entbtn {
-  position: absolute; right: 8px; bottom: 8px; width: 28px; height: 28px;
-  border-radius: var(--radius); background: var(--accent); border: none; color: #fff;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 16px; cursor: pointer; line-height: 1;
-}
-.entbtn:hover:not(:disabled) { filter: brightness(1.08); }
-.entbtn:disabled { opacity: .4; cursor: not-allowed; }
+.composer .semi-input-textarea-wrapper,
+.composer .semi-input-textarea { height: 100%; }
 
 .model-row { display: flex; justify-content: flex-end; }
-.modeltrig {
-  display: inline-flex; align-items: center; gap: var(--space-sm);
-  background: transparent; border: none; color: #a9b4c2;
-  font-size: 12px; padding: var(--space-sm); border-radius: var(--radius); cursor: pointer;
-}
-.modeltrig:hover { color: var(--text); background: var(--panel2); }
-.modeltrig .caret { color: var(--muted); font-size: 11px; }
 
-/* 弹出小面板：上 Key / 下 模型列表 */
-.pop {
-  position: absolute; right: 14px; bottom: 46px; width: 248px; z-index: 20;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: var(--space-md); box-shadow: 0 8px 24px rgba(0,0,0,.45);
-}
-.pop[hidden] { display: none; }
-.pop .field { margin-bottom: var(--space-sm); }
-.pop .inp { width: 100%; }
-.pop-div { border-top: 1px solid var(--border); margin: var(--space-md) 0 var(--space-sm); }
-.pop-head { font-size: 11px; color: var(--muted); padding: var(--space-sm) var(--space-md); }
-.pop-list { display: flex; flex-direction: column; gap: var(--space-sm); }
-.popitem {
+/* Model selector popover content (rendered inside a Semi Popover) */
+.model-pop { width: 248px; padding: var(--space-sm); }
+.model-pop .field { margin-bottom: var(--space-sm); }
+.model-pop-head { font-size: 11px; color: var(--muted); padding: var(--space-sm) var(--space-md); }
+.model-pop-div { border-top: 1px solid var(--border); margin: var(--space-md) 0 var(--space-sm); }
+.model-list { display: flex; flex-direction: column; gap: var(--space-sm); }
+.model-item {
   display: flex; align-items: center; gap: var(--space-md); width: 100%;
   padding: var(--space-md); border-radius: var(--radius); font-size: 12px;
   background: transparent; border: none; color: #cbd3dd; cursor: pointer; text-align: left;
 }
-.popitem:hover { background: var(--panel2); }
-.popitem.is-selected { background: rgba(242, 92, 42, .16); color: #fff; }
-.popitem .tick { width: 14px; color: var(--accent); visibility: hidden; }
-.popitem.is-selected .tick { visibility: visible; }
-.popitem .popname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.popitem .kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 var(--space-sm); }
+.model-item:hover { background: var(--panel2); }
+.model-item.is-selected { background: rgba(242, 92, 42, .16); color: #fff; }
+.model-item .tick { width: 14px; color: var(--accent); visibility: hidden; }
+.model-item.is-selected .tick { visibility: visible; }
+.model-item .popname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-item .kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 var(--space-sm); }
 
 /* ⑤ 右侧：引擎实时渲染 */
 .right { flex: 1; display: flex; flex-direction: column; padding: var(--space-lg); min-width: 0; }
@@ -178,10 +157,8 @@ body {
   background: repeating-conic-gradient(#1a2029 0% 25%, #141a22 0% 50%) 50% / 24px 24px;
   border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
 }
-#preview { max-width: 100%; max-height: 100%; display: block; }
-#preview:not([src]) { display: none; }
+.preview-img { max-width: 100%; max-height: 100%; display: block; }
 .placeholder { position: absolute; color: var(--muted); font-size: 13px; pointer-events: none; padding: 0 var(--space-lg); text-align: center; }
-#preview[src] ~ .placeholder { display: none; }
 .status {
   margin-top: var(--space-md); font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
