@@ -197,30 +197,40 @@ fn kill_pid(pid: u32) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        use std::time::Duration;
         // The sidecar leads its own process group (see start_generation), so a
         // negative pid signals the whole group — sidecar + ProcessPoolExecutor
-        // workers. SIGKILL matches the Windows /F force-terminate semantics.
+        // workers.
+        let group = format!("-{pid}");
+        let alive = || {
+            Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        // Graceful first: SIGTERM lets the sidecar's handler raise SystemExit, so
+        // engine.run()'s `finally: _shutdown()` unlinks the /dev/shm canvas +
+        // edge-weight segments. A bare SIGKILL would skip that and leak them.
+        let _ = Command::new("kill").arg("-TERM").arg(&group).status();
+        for _ in 0..20 {
+            if !alive() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Still alive after the ~2s grace period — force-kill the whole group.
         let status = Command::new("kill")
             .arg("-KILL")
-            .arg(format!("-{pid}"))
+            .arg(&group)
             .status()
             .map_err(|e| format!("kill failed to run: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        // kill failed — if the process is simply already gone (the outcome stop
-        // wants), report success. `kill -0` probes existence without signaling;
-        // a non-zero probe means no such process.
-        let still_alive = Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if still_alive {
-            Err(format!("kill exited with {:?}", status.code()))
-        } else {
+        // Treat an already-gone process as success (it exited during the race).
+        if status.success() || !alive() {
             Ok(())
+        } else {
+            Err(format!("kill exited with {:?}", status.code()))
         }
     }
 }

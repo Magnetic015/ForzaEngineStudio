@@ -18,6 +18,7 @@ import base64
 import io
 import json
 import multiprocessing
+import signal
 import sys
 from pathlib import Path
 
@@ -123,6 +124,14 @@ def preprocess(image_path: str, sticker_mode: bool, canvas_w: int, canvas_h: int
 
 
 def main() -> int:
+    # Graceful termination: the Rust stop command sends SIGTERM before its SIGKILL
+    # fallback. Raising SystemExit unwinds engine.run()'s `finally: _shutdown()`,
+    # which unlinks the /dev/shm canvas + edge-weight segments. Unix only; on
+    # Windows stop uses taskkill and shared memory frees with the process handles.
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(130))
+    except (ValueError, AttributeError, OSError):
+        pass  # SIGTERM unavailable or not on the main thread — best-effort
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True)
     ap.add_argument("--stop-at", type=int, default=3000)
