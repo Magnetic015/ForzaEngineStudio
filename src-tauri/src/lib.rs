@@ -1,9 +1,18 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter};
+
+/// Tracks the currently running generation sidecar so `stop_generation` can kill
+/// it. Holds the OS pid (cleared by the reaper when the process ends). Only one
+/// render runs at a time (the frontend gates on `running`).
+#[derive(Default)]
+struct EngineState {
+    pid: Arc<Mutex<Option<u32>>>,
+}
 
 /// Locate the vendored `python/` dir (sibling of `src-tauri/`).
 /// NOTE: uses CARGO_MANIFEST_DIR — valid for `tauri dev`. For a bundled release
@@ -29,6 +38,7 @@ fn venv_python(py_dir: &Path) -> PathBuf {
 #[tauri::command]
 fn start_generation(
     app: AppHandle,
+    state: tauri::State<'_, EngineState>,
     image: String,
     stop_at: u32,
     canvas_width: u32,
@@ -111,10 +121,22 @@ fn start_generation(
         }
     });
 
-    // Reap the child; report abnormal exit so the UI can unstick itself.
+    // Record the pid so `stop_generation` can terminate this run on request.
+    *state.pid.lock().unwrap() = Some(child.id());
+
+    // Reap the child; clear our pid slot and report abnormal exit — this covers
+    // both a crash and a user-initiated stop — so the UI can unstick itself.
     let app_wait = app.clone();
+    let pid_slot = state.pid.clone();
     std::thread::spawn(move || {
-        if let Ok(status) = child.wait() {
+        let my_pid = child.id();
+        let status = child.wait();
+        if let Ok(mut g) = pid_slot.lock() {
+            if *g == Some(my_pid) {
+                *g = None;
+            }
+        }
+        if let Ok(status) = status {
             if !status.success() {
                 let _ = app_wait
                     .emit("engine-event", serde_json::json!({"type":"exit","code": status.code()}));
@@ -123,6 +145,49 @@ fn start_generation(
     });
 
     Ok(())
+}
+
+/// Stop the in-flight generation: terminate the sidecar process tree by pid.
+/// The reaper thread observes the exit and clears the pid slot; the frontend
+/// resets its own UI optimistically, so the resulting `exit` event is ignored.
+#[tauri::command]
+fn stop_generation(state: tauri::State<'_, EngineState>) -> Result<(), String> {
+    let pid = *state.pid.lock().unwrap();
+    match pid {
+        Some(pid) => kill_pid(pid),
+        None => Ok(()),
+    }
+}
+
+/// Best-effort terminate a process (and its children) by pid, cross-platform.
+fn kill_pid(pid: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map_err(|e| format!("taskkill failed to run: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("taskkill exited with {:?}", status.code()))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .map_err(|e| format!("kill failed to run: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("kill exited with {:?}", status.code()))
+        }
+    }
 }
 
 /// Run the AI image-edit sidecar and return the edited image path.
@@ -297,7 +362,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![start_generation, ai_process_image, read_image_data_url, import_json])
+        .manage(EngineState::default())
+        .invoke_handler(tauri::generate_handler![start_generation, stop_generation, ai_process_image, read_image_data_url, import_json])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -30,11 +30,10 @@ function ModelConfigure({
   const content = (
     <div className="model-pop" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <label className="field">
-        API Key
-        <Input mode="password" value={draft} onChange={(v) => setDraft(v)} onBlur={commit} placeholder="sk-..." />
+        <Input mode="password" value={draft} onChange={(v) => setDraft(v)} onBlur={commit} placeholder="请输入API KEY" />
       </label>
       <div className="model-pop-div" />
-      <div className="model-pop-head">模型</div>
+      {/* <div className="model-pop-head">模型</div> */}
       <div className="model-list">
         {MODELS.map((m) => (
           <button
@@ -69,12 +68,13 @@ function ModelConfigure({
       <Button
         theme="borderless"
         size="small"
+        style={{ fontSize: 11, fontWeight: 400 }}
         type={hasKey && hasModel ? "tertiary" : "warning"}
         onClick={() => setVisible((v) => !v)}
         aria-haspopup="true"
         aria-expanded={visible}
       >
-        {!hasKey ? "请输入key" : !hasModel ? "请选择模型" : model} ▾
+        {!hasKey ? "请输入API KEY" : !hasModel ? "请选择模型" : model} ▾
       </Button>
     </Popover>
   );
@@ -103,7 +103,7 @@ export default function AIComposer(props: AIComposerProps) {
 
   return (
     <>
-      {lastPrompt && (
+      {(
         <div className="last-prompt">
           <span key={lastPrompt} className="last-prompt-text" title={lastPrompt}>
             {lastPrompt}
@@ -121,7 +121,7 @@ export default function AIComposer(props: AIComposerProps) {
         renderConfigureArea={renderConfigureArea}
         onContentChange={() => setHasContent(!!editorText().trim())}
         onMessageSend={() => onSend(editorText())}
-        onStopGenerate={() => {}}
+        onStopGenerate={() => { }}
       />
     </>
   );

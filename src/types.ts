@@ -30,11 +30,11 @@ export interface TopBarProps {
   setBackend: (v: string) => void;
   assistMode: string; // "off" | "on"
   setAssistMode: (v: string) => void;
-  backendText: string; // last "backend" engine event message ("" when none)
   progress: ProgressState;
   running: boolean;
   canStart: boolean; // a target image is selected and not running
   onStart: () => void;
+  onStop: () => void; // terminate the in-flight render
   onImportJson: () => void;
   onResetPreview: () => void;
 }
@@ -44,6 +44,7 @@ export interface CandidateStripProps {
   selectedIndex: number;
   onSelect: (i: number) => void;
   onPick: () => void; // open the file picker (empty-state "+" slot)
+  disabled: boolean; // AI editing or rendering in flight → lock selection + picker
 }
 
 export interface AIComposerProps {

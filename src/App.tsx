@@ -5,6 +5,7 @@ import {
   readImageDataUrl,
   aiProcessImage,
   startGeneration,
+  stopGeneration,
   importJson,
   pickImageFile,
   pickJsonFile,
@@ -54,7 +55,7 @@ export default function App() {
   const [stickerMode, setStickerMode] = useState("default");
   const [bgColor, setBgColor] = useState("#ffffff");
   const [backend, setBackend] = useState("gpu");
-  const [assistMode, setAssistMode] = useState("off");
+  const [assistMode, setAssistMode] = useState("on");
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
@@ -62,7 +63,6 @@ export default function App() {
 
   // render / status surfaces
   const [status, setStatus] = useState(READY_STATUS);
-  const [backendText, setBackendText] = useState("");
   const [progress, setProgress] = useState<ProgressState>({ n: 0, total: 0, rms: 0 });
   const [previewSrc, setPreviewSrc] = useState("");
 
@@ -75,11 +75,10 @@ export default function App() {
   const sendBlocked = aiRunning || running || !hasTarget || !apiKey.trim() || !currentModel;
 
   // ── candidate helpers ───────────────────────────────────────────────────────
-  const resetCandidates = (first: Cand) => {
-    const next = [first];
-    candidatesRef.current = next;
-    setCandidates(next);
-    setSelectedIndex(0);
+  // Label for a freshly picked local image: 原图 / 原图 2 / 原图 3 …
+  const nextLocalLabel = () => {
+    const n = candidatesRef.current.filter((c) => c.label.startsWith("原图")).length;
+    return n === 0 ? "原图" : `原图 ${n + 1}`;
   };
   const addCandidate = (c: Cand) => {
     const idx = candidatesRef.current.length; // new item lands at the current length
@@ -88,10 +87,15 @@ export default function App() {
     setCandidates(next);
     setSelectedIndex(idx);
   };
+  // Block target switches while an AI edit or a render is in flight (mirrors pickImage's guard).
+  const selectCandidate = (i: number) => {
+    if (running || aiRunning) return;
+    setSelectedIndex(i);
+  };
 
   // ── actions ─────────────────────────────────────────────────────────────────
   async function pickImage() {
-    if (running) return;
+    if (running || aiRunning) return;
     if (isTauri) {
       const file = await pickImageFile();
       if (!file) return;
@@ -102,8 +106,9 @@ export default function App() {
       } catch {
         /* leave placeholder */
       }
-      resetCandidates({ path: file, src: u, label: "原图" });
-      setStatus("已载入原图（候选①）。可做 AI 处理，或选中目标图后开始渲染。");
+      const label = nextLocalLabel();
+      addCandidate({ path: file, src: u, label });
+      setStatus(`已载入${label}（候选 ${candidatesRef.current.length}）。可做 AI 处理，或选中目标图后开始渲染。`);
       return;
     }
     // plain-browser fallback: preview only
@@ -113,8 +118,8 @@ export default function App() {
     input.onchange = () => {
       const f = input.files?.[0];
       if (!f) return;
-      resetCandidates({ path: null, src: URL.createObjectURL(f), label: "原图" });
-      setStatus("纯前端预览模式：已加载原图。渲染 / AI 需在桌面应用内运行。");
+      addCandidate({ path: null, src: URL.createObjectURL(f), label: nextLocalLabel() });
+      setStatus("纯前端预览模式：已加载图片。渲染 / AI 需在桌面应用内运行。");
     };
     input.click();
   }
@@ -187,6 +192,21 @@ export default function App() {
     }
   }
 
+  // Terminate the running engine. Flip `running` off first (synchronously, via the
+  // ref) so the kill-induced `exit` event is ignored instead of surfacing as an
+  // "abnormal exit". The Rust side kills the sidecar process by pid.
+  async function stop() {
+    if (!running) return;
+    setRunning(false);
+    setStatus("正在终止渲染…");
+    try {
+      await stopGeneration();
+      setStatus("已终止渲染。");
+    } catch (e) {
+      setStatus("终止失败：" + e);
+    }
+  }
+
   async function handleImportJson() {
     if (running) return;
     if (!isTauri) {
@@ -219,9 +239,6 @@ export default function App() {
     switch (p.type) {
       case "meta":
         setStatus(`画布 ${p.width}×${p.height} · 生成中…`);
-        break;
-      case "backend":
-        setBackendText("计算后端：" + p.message);
         break;
       case "assist": {
         const parts = Object.keys(p.applied || {});
@@ -279,11 +296,11 @@ export default function App() {
           setBackend={setBackend}
           assistMode={assistMode}
           setAssistMode={setAssistMode}
-          backendText={backendText}
           progress={progress}
           running={running}
           canStart={canStart}
           onStart={start}
+          onStop={stop}
           onImportJson={handleImportJson}
           onResetPreview={resetPreview}
         />
@@ -295,8 +312,9 @@ export default function App() {
             <CandidateStrip
               candidates={candidates}
               selectedIndex={selectedIndex}
-              onSelect={setSelectedIndex}
+              onSelect={selectCandidate}
               onPick={pickImage}
+              disabled={running || aiRunning}
             />
             <figure className="target-fig">
               <div className="target">
