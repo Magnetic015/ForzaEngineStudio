@@ -82,13 +82,6 @@ fn start_generation(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    // Own process group so stop_generation can signal the whole render tree — the
-    // engine's ProcessPoolExecutor workers are children of the sidecar.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
 
     let mut child = cmd
         .spawn()
@@ -175,7 +168,8 @@ fn stop_generation(state: tauri::State<'_, EngineState>) -> Result<(), String> {
     }
 }
 
-/// Best-effort terminate a process (and its children) by pid, cross-platform.
+/// Terminate the sidecar process tree by pid. This app targets Windows; the
+/// non-Windows arm is a minimal stub so the crate still builds elsewhere.
 fn kill_pid(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -197,43 +191,8 @@ fn kill_pid(pid: u32) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        use std::time::Duration;
-        // The sidecar leads its own process group (see start_generation), so the
-        // negative pid `-{pid}` signals the whole group — sidecar + workers. The
-        // `--` is required so procps `kill` treats the leading-dash group id as a
-        // target operand instead of parsing it as an option.
-        let group = format!("-{pid}");
-        let alive = || {
-            Command::new("kill")
-                .arg("-0")
-                .arg(pid.to_string())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        };
-        // Graceful first: SIGTERM lets the sidecar's handler raise SystemExit, so
-        // engine.run()'s `finally: _shutdown()` unlinks the /dev/shm canvas +
-        // edge-weight segments. A bare SIGKILL would skip that and leak them.
-        let _ = Command::new("kill").arg("-TERM").arg("--").arg(&group).status();
-        for _ in 0..20 {
-            if !alive() {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        // Still alive after the ~2s grace period — force-kill the whole group.
-        let status = Command::new("kill")
-            .arg("-KILL")
-            .arg("--")
-            .arg(&group)
-            .status()
-            .map_err(|e| format!("kill failed to run: {e}"))?;
-        // Treat an already-gone process as success (it exited during the race).
-        if status.success() || !alive() {
-            Ok(())
-        } else {
-            Err(format!("kill exited with {:?}", status.code()))
-        }
+        let _ = pid;
+        Err("stop is only supported on Windows".to_string())
     }
 }
 
