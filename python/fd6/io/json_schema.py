@@ -26,6 +26,17 @@ def _parse_background(value) -> tuple[int, int, int] | None:
     return (clamp(r), clamp(g), clamp(b))
 
 
+def _parse_rect(value) -> tuple[int, int, int, int] | None:
+    """Coerce a stored/passed [ox, oy, w, h] to an int 4-tuple, or None."""
+    if not value:
+        return None
+    try:
+        ox, oy, w, h = (int(value[0]), int(value[1]), int(value[2]), int(value[3]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    return (ox, oy, w, h)
+
+
 @dataclass
 class FD6Document:
     """v1 of the FD6 shape JSON document. See README for schema details."""
@@ -56,12 +67,20 @@ class FD6Document:
     # None / absent on sticker docs and older JSONs (render falls back to the
     # legacy grey 40 so pre-existing documents reload exactly as before).
     background: tuple[int, int, int] | None = None
+    # Fit-buffer rectangle [ox, oy, w, h]: where the aspect-fit image sits inside
+    # the W×H canvas. Stored so Import-JSON rebuilds the EXACT seed the engine
+    # composited over (grey-40 / under-paint inside the rect, `background` outside)
+    # and re-masks the buffer — making the reload pixel-match the live render.
+    # None / absent on sticker docs and older JSONs (reload falls back to a flat
+    # fill, exactly as those documents rendered before).
+    image_rect: tuple[int, int, int, int] | None = None
     shapes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["image_size"] = list(self.image_size)
         d["background"] = list(self.background) if self.background is not None else None
+        d["image_rect"] = list(self.image_rect) if self.image_rect is not None else None
         return d
 
     @classmethod
@@ -85,6 +104,7 @@ class FD6Document:
             base_image=str(data.get("base_image", "") or ""),
             assist=dict(data.get("assist", {}) or {}),
             background=_parse_background(data.get("background")),
+            image_rect=_parse_rect(data.get("image_rect")),
             shapes=list(data.get("shapes", [])),
         )
 
@@ -102,6 +122,7 @@ class FD6Document:
         base_image: str = "",
         assist: dict | None = None,
         background: tuple[int, int, int] | None = None,
+        image_rect: tuple[int, int, int, int] | None = None,
     ) -> "FD6Document":
         shape_list = [s.to_json() for s in shapes]
         return cls(
@@ -116,5 +137,6 @@ class FD6Document:
             base_image=base_image or "",
             assist=dict(assist or {}),
             background=_parse_background(background),
+            image_rect=_parse_rect(image_rect),
             shapes=shape_list,
         )

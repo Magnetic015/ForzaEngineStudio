@@ -67,11 +67,30 @@ def main() -> int:
         if doc.sticker_mode:
             canvas = render_shapes(shapes, w, h, transparent_bg=True)        # RGBA
         else:
-            # Default mode: paint over the canvas colour the engine used (the
-            # user's chosen fill). Legacy docs without `background` fall back to
-            # the historical grey 40 so they reload exactly as before.
+            # Default mode: rebuild the EXACT seed the engine composited over so
+            # the reload pixel-matches the live render. The engine seeds grey-40
+            # (or the hybrid under-paint) inside the fitted-image rect and the
+            # chosen `background` in the buffer ring, then masks shapes out of
+            # the buffer. Reproduce all three. Legacy docs (no background / rect)
+            # fall back to a flat fill, exactly as they reloaded before.
             bg = doc.background if doc.background is not None else (40, 40, 40)
-            canvas = render_shapes(shapes, w, h, background=bg, base=base)
+            rect = doc.image_rect
+            if base is not None and base.shape[:2] == (h, w):
+                seed = np.ascontiguousarray(base[:, :, :3]).astype(np.uint8).copy()
+            else:
+                seed = np.full((h, w, 3), bg, dtype=np.uint8)
+                if rect is not None:
+                    ox, oy, rw, rh = rect
+                    seed[oy:oy + rh, ox:ox + rw] = (40, 40, 40)  # engine's image-region seed
+            canvas = render_shapes(shapes, w, h, base=seed)
+            # The engine never paints the buffer (composite ANDs the alpha mask),
+            # so restore the clean canvas colour there instead of letting the
+            # unmasked replay's edge spill show.
+            if rect is not None:
+                ox, oy, rw, rh = rect
+                mask = np.ones((h, w), dtype=bool)
+                mask[oy:oy + rh, ox:ox + rw] = False
+                canvas[mask] = bg
         mode = "RGBA" if (canvas.ndim == 3 and canvas.shape[2] == 4) else "RGB"
         img = Image.fromarray(np.ascontiguousarray(canvas), mode)
         buf = io.BytesIO()
