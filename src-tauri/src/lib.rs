@@ -198,9 +198,10 @@ fn kill_pid(pid: u32) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         use std::time::Duration;
-        // The sidecar leads its own process group (see start_generation), so a
-        // negative pid signals the whole group — sidecar + ProcessPoolExecutor
-        // workers.
+        // The sidecar leads its own process group (see start_generation), so the
+        // negative pid `-{pid}` signals the whole group — sidecar + workers. The
+        // `--` is required so procps `kill` treats the leading-dash group id as a
+        // target operand instead of parsing it as an option.
         let group = format!("-{pid}");
         let alive = || {
             Command::new("kill")
@@ -213,7 +214,7 @@ fn kill_pid(pid: u32) -> Result<(), String> {
         // Graceful first: SIGTERM lets the sidecar's handler raise SystemExit, so
         // engine.run()'s `finally: _shutdown()` unlinks the /dev/shm canvas +
         // edge-weight segments. A bare SIGKILL would skip that and leak them.
-        let _ = Command::new("kill").arg("-TERM").arg(&group).status();
+        let _ = Command::new("kill").arg("-TERM").arg("--").arg(&group).status();
         for _ in 0..20 {
             if !alive() {
                 return Ok(());
@@ -223,6 +224,7 @@ fn kill_pid(pid: u32) -> Result<(), String> {
         // Still alive after the ~2s grace period — force-kill the whole group.
         let status = Command::new("kill")
             .arg("-KILL")
+            .arg("--")
             .arg(&group)
             .status()
             .map_err(|e| format!("kill failed to run: {e}"))?;
