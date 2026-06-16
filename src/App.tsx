@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Toast } from "@douyinfe/semi-ui";
 import {
   isTauri,
   readImageDataUrl,
@@ -10,7 +11,7 @@ import {
   type Cand,
   type EngineEvent,
 } from "./api/tauri";
-import { MODELS, type ProgressState } from "./types";
+import { type ProgressState } from "./types";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { useSplitter } from "./hooks/useSplitter";
 import TopBar from "./components/TopBar";
@@ -33,7 +34,7 @@ export default function App() {
   // which time the render closure may be stale — the original used a live array.
   const candidatesRef = useRef<Cand[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [currentModel, setCurrentModel] = useState<string>(MODELS[0]);
+  const [currentModel, setCurrentModel] = useState<string>(""); // "" until the user picks a model
   const [running, setRunningState] = useState(false);
   // Synchronous mirror of `running`: async engine events read a render closure
   // that may predate the setRunning(true) commit, so an `exit` arriving in that
@@ -57,7 +58,7 @@ export default function App() {
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [lastPrompt, setLastPrompt] = useState(""); // last submitted prompt, echoed by the composer
 
   // render / status surfaces
   const [status, setStatus] = useState(READY_STATUS);
@@ -71,7 +72,7 @@ export default function App() {
   const currentRenderPath = selectedCand?.path ?? null;
   const hasTarget = selectedIndex >= 0;
   const canStart = hasTarget && !running;
-  const sendDisabled = aiRunning || running || !hasTarget || !apiKey.trim() || !prompt.trim();
+  const sendBlocked = aiRunning || running || !hasTarget || !apiKey.trim() || !currentModel;
 
   // ── candidate helpers ───────────────────────────────────────────────────────
   const resetCandidates = (first: Cand) => {
@@ -118,21 +119,23 @@ export default function App() {
     input.click();
   }
 
-  async function aiProcess() {
+  async function aiProcess(text: string) {
     if (aiRunning || running || !hasTarget) return;
     const key = apiKey.trim();
-    const text = prompt.trim();
-    if (!key || !text) return;
+    const t = text.trim();
+    if (!key || !t) return;
     const inputPath = currentRenderPath;
     if (!isTauri || !inputPath) {
       setStatus("纯前端预览模式：AI 处理需在桌面应用内运行。");
       return;
     }
     const srcLabel = selectedCand?.label || "目标图";
+    // Echo the submitted prompt; AIChatInput clears its own input via `generating`.
+    setLastPrompt(t);
     setAiRunning(true);
     setStatus(`AI 处理中…（输入：${srcLabel}，可能需要十几秒）`);
     try {
-      const newPath = await aiProcessImage({ image: inputPath, apiKey: key, model: currentModel, prompt: text });
+      const newPath = await aiProcessImage({ image: inputPath, apiKey: key, model: currentModel, prompt: t });
       const label = "AI " + candidatesRef.current.length; // 原图 is index 0 → first AI = "AI 1"
       let u = "";
       try {
@@ -143,7 +146,8 @@ export default function App() {
       addCandidate({ path: newPath, src: u, label });
       setStatus(`AI 处理完成（基于${srcLabel}），已加入候选「${label}」并选为目标图。`);
     } catch (e) {
-      setStatus("AI 处理失败：" + e);
+      Toast.error({ content: "AI 处理失败：" + e, duration: 5 });
+      setStatus("AI 处理失败");
     } finally {
       setAiRunning(false);
     }
@@ -200,6 +204,14 @@ export default function App() {
     } catch (e) {
       setStatus("导入 JSON 失败：" + e);
     }
+  }
+
+  // Reset only the render output (preview image, progress, status); inputs stay.
+  function resetPreview() {
+    if (running) return;
+    setPreviewSrc("");
+    setProgress({ n: 0, total: 0, rms: 0 });
+    setStatus(READY_STATUS);
   }
 
   // ── engine event stream ───────────────────────────────────────────────────────
@@ -273,6 +285,7 @@ export default function App() {
           canStart={canStart}
           onStart={start}
           onImportJson={handleImportJson}
+          onResetPreview={resetPreview}
         />
       </header>
 
@@ -294,10 +307,10 @@ export default function App() {
 
           <div className="ai-block">
             <AIComposer
-              prompt={prompt}
-              setPrompt={setPrompt}
               onSend={aiProcess}
-              sendDisabled={sendDisabled}
+              aiRunning={aiRunning}
+              sendBlocked={sendBlocked}
+              lastPrompt={lastPrompt}
               apiKey={apiKey}
               setApiKey={setApiKey}
               model={currentModel}
