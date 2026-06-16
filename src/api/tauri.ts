@@ -47,6 +47,8 @@ export const aiProcessImage = (args: { image: string; apiKey: string; model: str
 
 export const startGeneration = (p: StartParams) => invoke("start_generation", { ...p });
 
+export const stopGeneration = () => invoke("stop_generation");
+
 export const importJson = (jsonPath: string) => invoke<string>("import_json", { jsonPath });
 
 // Subscribe to the engine event stream. Resolves to an unlisten fn.
