@@ -19,11 +19,11 @@ export default function TopBar(props: TopBarProps) {
     setBackend,
     assistMode,
     setAssistMode,
-    backendText,
     progress,
     running,
     canStart,
     onStart,
+    onStop,
     onImportJson,
     onResetPreview,
   } = props;
@@ -105,7 +105,7 @@ export default function TopBar(props: TopBarProps) {
           <Select
             value={backend}
             onChange={(v) => setBackend(v as string)}
-            style={{ width: 140 }}
+            style={{ width: 96 }}
             optionList={[
               { value: "gpu", label: "GPU" },
               { value: "cpu", label: "CPU" },
@@ -130,7 +130,6 @@ export default function TopBar(props: TopBarProps) {
             ]}
           />
         </label>
-        <span className="backend">{backendText}</span>
         <span className="spacer" />
         <div className="btn-group">
           <Button theme="light" type="tertiary" onClick={onImportJson} disabled={running}>
@@ -139,9 +138,15 @@ export default function TopBar(props: TopBarProps) {
           <Button theme="light" type="tertiary" onClick={onResetPreview} disabled={running}>
             重置
           </Button>
-          <Button theme="solid" type="primary" onClick={onStart} disabled={!canStart}>
-            开始渲染
-          </Button>
+          {running ? (
+            <Button theme="solid" type="danger" onClick={onStop}>
+              终止渲染
+            </Button>
+          ) : (
+            <Button theme="solid" type="primary" onClick={onStart} disabled={!canStart}>
+              开始渲染
+            </Button>
+          )}
         </div>
       </div>
       <div className="progress-wrap">

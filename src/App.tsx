@@ -5,6 +5,7 @@ import {
   readImageDataUrl,
   aiProcessImage,
   startGeneration,
+  stopGeneration,
   importJson,
   pickImageFile,
   pickJsonFile,
@@ -45,6 +46,12 @@ export default function App() {
     runningRef.current = on;
     setRunningState(on);
   };
+  // Render generation bookkeeping. `genCounterRef` is the monotonic source; each
+  // start takes the next id, publishes it to `currentGenRef` BEFORE invoking (so
+  // startup events already match), and passes it to Rust. The event handler drops
+  // events whose gen ≠ the live render's; stop resets currentGenRef to 0.
+  const genCounterRef = useRef(0);
+  const currentGenRef = useRef(0);
   const [aiRunning, setAiRunning] = useState(false);
 
   // top-bar controls
@@ -54,7 +61,7 @@ export default function App() {
   const [stickerMode, setStickerMode] = useState("default");
   const [bgColor, setBgColor] = useState("#ffffff");
   const [backend, setBackend] = useState("gpu");
-  const [assistMode, setAssistMode] = useState("off");
+  const [assistMode, setAssistMode] = useState("on");
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
@@ -62,7 +69,6 @@ export default function App() {
 
   // render / status surfaces
   const [status, setStatus] = useState(READY_STATUS);
-  const [backendText, setBackendText] = useState("");
   const [progress, setProgress] = useState<ProgressState>({ n: 0, total: 0, rms: 0 });
   const [previewSrc, setPreviewSrc] = useState("");
 
@@ -75,11 +81,10 @@ export default function App() {
   const sendBlocked = aiRunning || running || !hasTarget || !apiKey.trim() || !currentModel;
 
   // ── candidate helpers ───────────────────────────────────────────────────────
-  const resetCandidates = (first: Cand) => {
-    const next = [first];
-    candidatesRef.current = next;
-    setCandidates(next);
-    setSelectedIndex(0);
+  // Label for a freshly picked local image: 原图 / 原图 2 / 原图 3 …
+  const nextLocalLabel = () => {
+    const n = candidatesRef.current.filter((c) => c.label.startsWith("原图")).length;
+    return n === 0 ? "原图" : `原图 ${n + 1}`;
   };
   const addCandidate = (c: Cand) => {
     const idx = candidatesRef.current.length; // new item lands at the current length
@@ -88,10 +93,15 @@ export default function App() {
     setCandidates(next);
     setSelectedIndex(idx);
   };
+  // Block target switches while an AI edit or a render is in flight (mirrors pickImage's guard).
+  const selectCandidate = (i: number) => {
+    if (running || aiRunning) return;
+    setSelectedIndex(i);
+  };
 
   // ── actions ─────────────────────────────────────────────────────────────────
   async function pickImage() {
-    if (running) return;
+    if (running || aiRunning) return;
     if (isTauri) {
       const file = await pickImageFile();
       if (!file) return;
@@ -102,8 +112,9 @@ export default function App() {
       } catch {
         /* leave placeholder */
       }
-      resetCandidates({ path: file, src: u, label: "原图" });
-      setStatus("已载入原图（候选①）。可做 AI 处理，或选中目标图后开始渲染。");
+      const label = nextLocalLabel();
+      addCandidate({ path: file, src: u, label });
+      setStatus(`已载入${label}（候选 ${candidatesRef.current.length}）。可做 AI 处理，或选中目标图后开始渲染。`);
       return;
     }
     // plain-browser fallback: preview only
@@ -113,8 +124,8 @@ export default function App() {
     input.onchange = () => {
       const f = input.files?.[0];
       if (!f) return;
-      resetCandidates({ path: null, src: URL.createObjectURL(f), label: "原图" });
-      setStatus("纯前端预览模式：已加载原图。渲染 / AI 需在桌面应用内运行。");
+      addCandidate({ path: null, src: URL.createObjectURL(f), label: nextLocalLabel() });
+      setStatus("纯前端预览模式：已加载图片。渲染 / AI 需在桌面应用内运行。");
     };
     input.click();
   }
@@ -165,6 +176,12 @@ export default function App() {
     const safeStopAt = intOrDefault(stopAt, 3000);
     const safeW = intOrDefault(canvasWidth, 1000);
     const safeH = intOrDefault(canvasHeight, 1000);
+    // Assign and publish the generation BEFORE invoking, so events the Rust stdout
+    // thread forwards during startup (e.g. an engine-init error) already match
+    // currentGenRef instead of being dropped by the gen guard.
+    const gen = genCounterRef.current + 1;
+    genCounterRef.current = gen;
+    currentGenRef.current = gen;
     setRunning(true);
     setStatus(
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
@@ -180,10 +197,35 @@ export default function App() {
         backend,
         assist,
         bgColor,
+        generation: gen,
       });
     } catch (e) {
+      currentGenRef.current = 0;
       setStatus("启动失败：" + e);
       setRunning(false);
+    }
+  }
+
+  // Terminate the running engine. Flip `running` off first (synchronously, via the
+  // ref) so the kill-induced `exit` event is ignored instead of surfacing as an
+  // "abnormal exit". The Rust side kills the sidecar process by pid.
+  async function stop() {
+    if (!running) return;
+    const stoppedGen = currentGenRef.current; // remember in case the kill fails
+    setRunning(false);
+    // Invalidate the stopped render so its buffered same-gen frame/done/error
+    // events (flushed just before the kill lands) can't overwrite the stopped state.
+    currentGenRef.current = 0;
+    setStatus("正在终止渲染…");
+    try {
+      await stopGeneration();
+      setStatus("已终止渲染。");
+    } catch (e) {
+      // Kill failed — the sidecar is likely still alive and rendering. Restore both
+      // running and the generation so its ongoing events are honoured again.
+      currentGenRef.current = stoppedGen;
+      setRunning(true);
+      setStatus("终止失败，引擎可能仍在运行：" + e);
     }
   }
 
@@ -216,12 +258,13 @@ export default function App() {
 
   // ── engine event stream ───────────────────────────────────────────────────────
   useEngineEvents((p: EngineEvent) => {
+    // Drop events from a superseded render: after a Stop→Start, the old sidecar's
+    // queued stdout (frame/done/error/exit/…) must not touch the new run's
+    // preview/status. `log` is gen-less and side-effect-free, so let it through.
+    if (p.type !== "log" && p.gen !== undefined && p.gen !== currentGenRef.current) return;
     switch (p.type) {
       case "meta":
         setStatus(`画布 ${p.width}×${p.height} · 生成中…`);
-        break;
-      case "backend":
-        setBackendText("计算后端：" + p.message);
         break;
       case "assist": {
         const parts = Object.keys(p.applied || {});
@@ -279,11 +322,11 @@ export default function App() {
           setBackend={setBackend}
           assistMode={assistMode}
           setAssistMode={setAssistMode}
-          backendText={backendText}
           progress={progress}
           running={running}
           canStart={canStart}
           onStart={start}
+          onStop={stop}
           onImportJson={handleImportJson}
           onResetPreview={resetPreview}
         />
@@ -295,8 +338,9 @@ export default function App() {
             <CandidateStrip
               candidates={candidates}
               selectedIndex={selectedIndex}
-              onSelect={setSelectedIndex}
+              onSelect={selectCandidate}
               onPick={pickImage}
+              disabled={running || aiRunning}
             />
             <figure className="target-fig">
               <div className="target">
