@@ -28,16 +28,16 @@ class Rectangle(Shape):
             return np.zeros((0, 0), dtype=np.uint8), bbox
         return np.full((y1 - y0, x1 - x0), 255, dtype=np.uint8), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "Rectangle":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "Rectangle":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         which = rng.randint(0, 1)
         if which == 0:
-            new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 16), 0, h - 1)
+            new.x = _clamp(new.x + rng.gauss(0, 16 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 16 * scale), 0, h - 1)
         else:
-            new.hw = _clamp(new.hw + rng.gauss(0, 16), 1, w)
-            new.hh = _clamp(new.hh + rng.gauss(0, 16), 1, h)
+            new.hw = _clamp(new.hw + rng.gauss(0, 16 * scale), 1, w)
+            new.hh = _clamp(new.hh + rng.gauss(0, 16 * scale), 1, h)
         return new
 
     def to_json(self) -> dict:
@@ -103,18 +103,18 @@ class RotatedRectangle(Shape):
         mask = (np.abs(xr) <= self.hw) & (np.abs(yr) <= self.hh)
         return (mask.astype(np.uint8) * 255), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "RotatedRectangle":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "RotatedRectangle":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         which = rng.randint(0, 2)
         if which == 0:
-            new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 16), 0, h - 1)
+            new.x = _clamp(new.x + rng.gauss(0, 16 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 16 * scale), 0, h - 1)
         elif which == 1:
-            new.hw = _clamp(new.hw + rng.gauss(0, 16), 1, w)
-            new.hh = _clamp(new.hh + rng.gauss(0, 16), 1, h)
+            new.hw = _clamp(new.hw + rng.gauss(0, 16 * scale), 1, w)
+            new.hh = _clamp(new.hh + rng.gauss(0, 16 * scale), 1, h)
         else:
-            new.angle = (new.angle + rng.gauss(0, 25)) % 180.0
+            new.angle = (new.angle + rng.gauss(0, 25 * scale)) % 180.0
         return new
 
     def to_json(self) -> dict:
