@@ -12,6 +12,9 @@ use tauri::{AppHandle, Emitter};
 #[derive(Default)]
 struct EngineState {
     pid: Arc<Mutex<Option<u32>>>,
+    // Monotonic render id. Tagged onto `exit` events so the frontend can ignore a
+    // stopped render's late exit instead of mistaking it for a new render crashing.
+    gen: Arc<Mutex<u64>>,
 }
 
 /// Locate the vendored `python/` dir (sibling of `src-tauri/`).
@@ -47,7 +50,7 @@ fn start_generation(
     backend: String,
     assist: bool,
     bg_color: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     let py_dir = project_python_dir();
     let script = py_dir.join("sidecar.py");
     if !script.exists() {
@@ -80,6 +83,13 @@ fn start_generation(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    // Own process group so stop_generation can signal the whole render tree — the
+    // engine's ProcessPoolExecutor workers are children of the sidecar.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
 
     let mut child = cmd
@@ -121,11 +131,18 @@ fn start_generation(
         }
     });
 
-    // Record the pid so `stop_generation` can terminate this run on request.
+    // Record the pid so `stop_generation` can terminate this run on request, and
+    // bump the render generation so this run's exit can be told apart from others.
     *state.pid.lock().unwrap() = Some(child.id());
+    let my_gen = {
+        let mut g = state.gen.lock().unwrap();
+        *g += 1;
+        *g
+    };
 
     // Reap the child; clear our pid slot and report abnormal exit — this covers
-    // both a crash and a user-initiated stop — so the UI can unstick itself.
+    // both a crash and a user-initiated stop — so the UI can unstick itself. The
+    // exit carries `gen` so the frontend ignores a stopped render's late exit.
     let app_wait = app.clone();
     let pid_slot = state.pid.clone();
     std::thread::spawn(move || {
@@ -138,13 +155,15 @@ fn start_generation(
         }
         if let Ok(status) = status {
             if !status.success() {
-                let _ = app_wait
-                    .emit("engine-event", serde_json::json!({"type":"exit","code": status.code()}));
+                let _ = app_wait.emit(
+                    "engine-event",
+                    serde_json::json!({"type":"exit","code": status.code(),"gen": my_gen}),
+                );
             }
         }
     });
 
-    Ok(())
+    Ok(my_gen)
 }
 
 /// Stop the in-flight generation: terminate the sidecar process tree by pid.
@@ -178,8 +197,12 @@ fn kill_pid(pid: u32) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        // The sidecar leads its own process group (see start_generation), so a
+        // negative pid signals the whole group — sidecar + ProcessPoolExecutor
+        // workers. SIGKILL matches the Windows /F force-terminate semantics.
         let status = Command::new("kill")
-            .arg(pid.to_string())
+            .arg("-KILL")
+            .arg(format!("-{pid}"))
             .status()
             .map_err(|e| format!("kill failed to run: {e}"))?;
         if status.success() {
