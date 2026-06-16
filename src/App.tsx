@@ -34,7 +34,16 @@ export default function App() {
   const candidatesRef = useRef<Cand[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [currentModel, setCurrentModel] = useState<string>(MODELS[0]);
-  const [running, setRunning] = useState(false);
+  const [running, setRunningState] = useState(false);
+  // Synchronous mirror of `running`: async engine events read a render closure
+  // that may predate the setRunning(true) commit, so an `exit` arriving in that
+  // window would otherwise be dropped (controls stuck disabled). The ref tracks
+  // the live value, matching the original's synchronous module-global flag.
+  const runningRef = useRef(false);
+  const setRunning = (on: boolean) => {
+    runningRef.current = on;
+    setRunningState(on);
+  };
   const [aiRunning, setAiRunning] = useState(false);
 
   // top-bar controls
@@ -227,7 +236,7 @@ export default function App() {
         setRunning(false);
         break;
       case "exit":
-        if (running) {
+        if (runningRef.current) {
           setStatus("引擎进程异常退出（code " + p.code + "）。请查看控制台日志。");
           setRunning(false);
         }
