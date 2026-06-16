@@ -237,6 +237,7 @@ class Engine:
         alpha_mask: np.ndarray | None = None,
         base_canvas: np.ndarray | None = None,
         importance_map: np.ndarray | None = None,
+        preview_background: tuple[int, int, int] | None = None,
     ) -> None:
         """Image → shapes generator.
 
@@ -251,6 +252,13 @@ class Engine:
           edge-weight used to bias shape placement, letting a saliency/structure
           map concentrate the layer budget on detail. None → unchanged Sobel
           behaviour.
+        * ``preview_background`` (r, g, b) — the solid colour the fit-buffer ring
+          (alpha == 0) is filled with for the *default* (non-sticker) render, so
+          the canvas (W×H) is visible and the live preview matches an Import-JSON
+          reload. ``None`` selects the legacy sticker behaviour: the buffer is
+          kept grey and the preview is transparent outside the silhouette. The
+          buffer is never scored (the alpha mask zeroes it), so its colour does
+          not perturb shape selection.
         """
         if target_rgb.ndim != 3 or target_rgb.shape[2] != 3:
             raise ValueError("target_rgb must be HxWx3 RGB uint8")
@@ -259,10 +267,17 @@ class Engine:
         self.profile = config.profile
         self.h, self.w = self.target.shape[:2]
         self.alpha_mask = alpha_mask if alpha_mask is not None else None
+        self._preview_background = (
+            tuple(int(c) for c in preview_background) if preview_background is not None else None
+        )
         if self.alpha_mask is not None:
             mask3 = (self.alpha_mask > 0)[:, :, None]
             self.target = self.target * mask3.astype(np.uint8)
             initial_canvas = np.full((self.h, self.w, 3), 40, dtype=np.uint8)
+            # Default mode: paint the (non-scored) buffer ring the user's chosen
+            # canvas colour so the W×H frame is visible. Sticker mode keeps grey.
+            if self._preview_background is not None:
+                initial_canvas[self.alpha_mask == 0] = self._preview_background
         else:
             avg = self.target.reshape(-1, 3).mean(axis=0).astype(np.uint8)
             initial_canvas = np.tile(avg, (self.h, self.w, 1)).astype(np.uint8)
@@ -277,7 +292,11 @@ class Engine:
                 raise ValueError("base_canvas must match target as HxWx3 uint8")
             if self.alpha_mask is not None:
                 mask3 = (self.alpha_mask > 0)[:, :, None]
-                base = np.where(mask3, base, 40).astype(np.uint8)
+                # Outside the subject use the chosen canvas colour (default mode)
+                # or grey (sticker), matching the non-base seeding above.
+                buffer_fill = np.array(self._preview_background if self._preview_background is not None
+                                       else (40, 40, 40), dtype=np.uint8)
+                base = np.where(mask3, base, buffer_fill).astype(np.uint8)
             initial_canvas = base
 
         # Allocate the shared canvas. Workers attach to this same buffer by name.
@@ -377,13 +396,22 @@ class Engine:
     def _preview_canvas(self) -> np.ndarray:
         """Return the canvas as RGB or RGBA for emit-to-preview events.
 
-        In sticker mode we attach the alpha mask as the 4th channel so the
-        preview pane renders transparent outside the silhouette — otherwise
-        the user sees a solid grey rectangle around the painted shape area
-        that doesn't match the (transparent) source PNG.
+        Sticker mode (``preview_background is None`` with an alpha mask): attach
+        the mask as the 4th channel so the preview renders transparent outside
+        the silhouette — matching the (transparent) source PNG.
+
+        Default mode (``preview_background`` set): return an opaque RGB canvas
+        with the fit-buffer ring forced to the chosen colour. This makes the
+        W×H canvas visible during live rendering and matches an Import-JSON
+        reload (which composites the same shapes over the same solid colour),
+        instead of the old transparent buffer that hid the canvas entirely.
         """
-        if self.alpha_mask is not None:
+        if self.alpha_mask is not None and self._preview_background is None:
             return np.dstack([self.canvas, self.alpha_mask]).copy()
+        if self.alpha_mask is not None and self._preview_background is not None:
+            out = self.canvas.copy()
+            out[self.alpha_mask == 0] = self._preview_background  # crisp frame, drop any edge spill
+            return out
         return self.canvas.copy()
 
     def seed_shapes(self, shapes: list[Shape]) -> None:

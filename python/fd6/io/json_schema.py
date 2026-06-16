@@ -10,6 +10,22 @@ FD6_FORMAT = "fd6.shapes"
 FD6_VERSION = 1
 
 
+def _parse_background(value) -> tuple[int, int, int] | None:
+    """Coerce a stored/passed background to an (r, g, b) uint8 tuple, or None.
+
+    Accepts a 3-sequence of numbers (clamped to 0..255); anything falsy or
+    malformed -> None (caller falls back to the legacy grey buffer).
+    """
+    if not value:
+        return None
+    try:
+        r, g, b = (int(value[0]), int(value[1]), int(value[2]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    clamp = lambda c: max(0, min(255, c))
+    return (clamp(r), clamp(g), clamp(b))
+
+
 @dataclass
 class FD6Document:
     """v1 of the FD6 shape JSON document. See README for schema details."""
@@ -35,11 +51,17 @@ class FD6Document:
     # JSONs (and shape-only Forza exports) load unchanged.
     base_image: str = ""
     assist: dict = field(default_factory=dict)
+    # Default-mode canvas fill colour (r, g, b) for the fit-buffer ring around
+    # the image. Stored so Import-JSON paints the same frame the engine showed.
+    # None / absent on sticker docs and older JSONs (render falls back to the
+    # legacy grey 40 so pre-existing documents reload exactly as before).
+    background: tuple[int, int, int] | None = None
     shapes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["image_size"] = list(self.image_size)
+        d["background"] = list(self.background) if self.background is not None else None
         return d
 
     @classmethod
@@ -62,6 +84,7 @@ class FD6Document:
             sticker_mode=bool(data.get("sticker_mode", False)),
             base_image=str(data.get("base_image", "") or ""),
             assist=dict(data.get("assist", {}) or {}),
+            background=_parse_background(data.get("background")),
             shapes=list(data.get("shapes", [])),
         )
 
@@ -78,6 +101,7 @@ class FD6Document:
         sticker_mode: bool = False,
         base_image: str = "",
         assist: dict | None = None,
+        background: tuple[int, int, int] | None = None,
     ) -> "FD6Document":
         shape_list = [s.to_json() for s in shapes]
         return cls(
@@ -91,5 +115,6 @@ class FD6Document:
             sticker_mode=sticker_mode,
             base_image=base_image or "",
             assist=dict(assist or {}),
+            background=_parse_background(background),
             shapes=shape_list,
         )

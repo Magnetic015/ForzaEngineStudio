@@ -36,6 +36,7 @@ fn start_generation(
     sticker: bool,
     backend: String,
     assist: bool,
+    bg_color: String,
 ) -> Result<(), String> {
     let py_dir = project_python_dir();
     let script = py_dir.join("sidecar.py");
@@ -51,6 +52,7 @@ fn start_generation(
         .arg("--stop-at").arg(stop_at.to_string())
         .arg("--canvas-width").arg(canvas_width.to_string())
         .arg("--canvas-height").arg(canvas_height.to_string())
+        .arg("--bg-color").arg(&bg_color)
         .arg("--backend").arg(&backend)
         .current_dir(&py_dir)
         .stdout(Stdio::piped())
