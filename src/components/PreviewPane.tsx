@@ -6,8 +6,11 @@ export default function PreviewPane(props: PreviewPaneProps) {
   return (
     <>
       <div className="preview-box">
-        <img className="preview-img" alt="渲染预览" src={previewSrc || undefined} />
-        {!previewSrc && <div className="placeholder">预览区 — 选择图片并点击「开始渲染」</div>}
+        {previewSrc ? (
+          <img className="preview-img" alt="渲染预览" src={previewSrc} />
+        ) : (
+          <div className="placeholder">预览区 — 选择图片并点击「开始渲染」</div>
+        )}
       </div>
       <div className="status">{status}</div>
     </>

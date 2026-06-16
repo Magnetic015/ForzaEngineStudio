@@ -36,6 +36,7 @@ export interface TopBarProps {
   canStart: boolean; // a target image is selected and not running
   onStart: () => void;
   onImportJson: () => void;
+  onResetPreview: () => void;
 }
 
 export interface CandidateStripProps {
@@ -46,18 +47,11 @@ export interface CandidateStripProps {
 }
 
 export interface AIComposerProps {
-  prompt: string;
-  setPrompt: (v: string) => void;
-  onSend: () => void;
-  sendDisabled: boolean;
-  // model selector (delegated to <ModelSelector/>):
-  apiKey: string;
-  setApiKey: (v: string) => void;
-  model: string;
-  onSelectModel: (m: string) => void;
-}
-
-export interface ModelSelectorProps {
+  onSend: (text: string) => void;
+  aiRunning: boolean; // drives AIChatInput `generating` (clears input + shows stop)
+  sendBlocked: boolean; // no key / no target / busy → can't send
+  lastPrompt: string; // most recent submitted prompt, echoed above the input
+  // model + key are configured inside the AIChatInput configure area:
   apiKey: string;
   setApiKey: (v: string) => void;
   model: string;
