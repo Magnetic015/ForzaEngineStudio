@@ -25,7 +25,7 @@ export interface StartParams {
 
 // `engine-event` payloads — line-JSON the Rust side forwards verbatim from the
 // Python sidecar. Keys mirror the sidecar's JSON exactly (snake_case).
-export type EngineEvent =
+export type EngineEvent = (
   | { type: "meta"; width: number; height: number }
   | { type: "backend"; message: string }
   | { type: "assist"; applied?: Record<string, unknown> }
@@ -33,8 +33,9 @@ export type EngineEvent =
   | { type: "frame"; shape_count: number; total: number; rms: number; png?: string }
   | { type: "done"; shape_count: number; total?: number; rms: number; png?: string; json_path: string }
   | { type: "error"; message: string }
-  | { type: "exit"; code: number | null; gen?: number }
-  | { type: "log"; message: string };
+  | { type: "exit"; code: number | null }
+  | { type: "log"; message: string }
+) & { gen?: number }; // gen: render generation injected by the Rust side (absent on log)
 
 // ── Tauri command wrappers ────────────────────────────────────────────────────
 // NOTE: keys stay camelCase here; Tauri auto-maps them to the Rust snake_case

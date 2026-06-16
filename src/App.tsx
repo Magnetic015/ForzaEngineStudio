@@ -208,7 +208,10 @@ export default function App() {
       await stopGeneration();
       setStatus("已终止渲染。");
     } catch (e) {
-      setStatus("终止失败：" + e);
+      // Kill failed — the old sidecar may still be alive and emitting events, so
+      // re-lock the controls to prevent an interleaved second render.
+      setRunning(true);
+      setStatus("终止失败，引擎可能仍在运行：" + e);
     }
   }
 
@@ -241,6 +244,10 @@ export default function App() {
 
   // ── engine event stream ───────────────────────────────────────────────────────
   useEngineEvents((p: EngineEvent) => {
+    // Drop events from a superseded render: after a Stop→Start, the old sidecar's
+    // queued stdout (frame/done/error/exit/…) must not touch the new run's
+    // preview/status. `log` is gen-less and side-effect-free, so let it through.
+    if (p.type !== "log" && p.gen !== undefined && p.gen !== currentGenRef.current) return;
     switch (p.type) {
       case "meta":
         setStatus(`画布 ${p.width}×${p.height} · 生成中…`);
@@ -270,9 +277,6 @@ export default function App() {
         setRunning(false);
         break;
       case "exit":
-        // Ignore a stopped render's late exit: its gen is older than the live
-        // render, so it must not flip a freshly started render off.
-        if (p.gen !== undefined && p.gen !== currentGenRef.current) break;
         if (runningRef.current) {
           setStatus("引擎进程异常退出（code " + p.code + "）。请查看控制台日志。");
           setRunning(false);

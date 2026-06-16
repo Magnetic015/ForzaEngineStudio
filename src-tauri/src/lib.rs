@@ -96,17 +96,28 @@ fn start_generation(
         .spawn()
         .map_err(|e| format!("failed to start sidecar ({}): {e}", python.display()))?;
 
+    // Bump the render generation up front so every forwarded event can be tagged
+    // with it; the frontend drops events whose gen isn't the live render's.
+    let my_gen = {
+        let mut g = state.gen.lock().unwrap();
+        *g += 1;
+        *g
+    };
+
     let stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
-    // stdout: one JSON event per line -> forward verbatim to the frontend.
+    // stdout: one JSON event per line -> tag with `gen` and forward to the frontend.
     let app_out = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
                 Ok(l) if !l.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&l) {
-                    Ok(v) => {
+                    Ok(mut v) => {
+                        if let Some(obj) = v.as_object_mut() {
+                            obj.insert("gen".into(), serde_json::json!(my_gen));
+                        }
                         let _ = app_out.emit("engine-event", v);
                     }
                     Err(_) => {
@@ -131,14 +142,8 @@ fn start_generation(
         }
     });
 
-    // Record the pid so `stop_generation` can terminate this run on request, and
-    // bump the render generation so this run's exit can be told apart from others.
+    // Record the pid so `stop_generation` can terminate this run on request.
     *state.pid.lock().unwrap() = Some(child.id());
-    let my_gen = {
-        let mut g = state.gen.lock().unwrap();
-        *g += 1;
-        *g
-    };
 
     // Reap the child; clear our pid slot and report abnormal exit — this covers
     // both a crash and a user-initiated stop — so the UI can unstick itself. The
