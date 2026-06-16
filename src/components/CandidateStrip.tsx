@@ -1,7 +1,7 @@
 // Vertical thumbnail strip of candidate images (原图 + AI results); empty-state "+" opens the picker.
 import type { CandidateStripProps } from "../types";
 
-export default function CandidateStrip({ candidates, selectedIndex, onSelect, onPick }: CandidateStripProps) {
+export default function CandidateStrip({ candidates, selectedIndex, onSelect, onPick, disabled }: CandidateStripProps) {
   return (
     <div className="candidates" aria-label="候选图：原图与 AI 处理结果">
       {candidates.map((c, i) => (
@@ -11,6 +11,7 @@ export default function CandidateStrip({ candidates, selectedIndex, onSelect, on
           className={"cand" + (i === selectedIndex ? " is-selected" : "")}
           title={c.label}
           onClick={() => onSelect(i)}
+          disabled={disabled}
         >
           <span className="cand-thumb">
             <img src={c.src} alt={c.label} />
@@ -23,6 +24,7 @@ export default function CandidateStrip({ candidates, selectedIndex, onSelect, on
         className="cand cand-empty"
         title={candidates.length === 0 ? "点击选择本地图片" : "选择新的本地图片"}
         onClick={onPick}
+        disabled={disabled}
       >
         <span className="cand-thumb">+</span>
       </button>

@@ -130,12 +130,6 @@ body {
   background-clip: content-box;
 }
 
-.backend {
-  color: var(--muted);
-  font-size: 11px;
-  padding-bottom: var(--space-md);
-}
-
 .progress-wrap {
   padding: 0 var(--space-lg) var(--space-lg);
 }
@@ -286,6 +280,21 @@ body {
   color: var(--accent);
 }
 
+/* locked while an AI edit or a render is in flight: greyed out, no hover affordance */
+.cand:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.cand:disabled:hover .cand-thumb {
+  border-color: var(--border);
+}
+
+.cand-empty:disabled:hover .cand-thumb {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
 .target-fig {
   flex: 1 1 auto;
   margin: 0;
@@ -394,7 +403,7 @@ body {
 
 /* Model selector popover content (rendered inside a Semi Popover) */
 .model-pop {
-  width: 248px;
+  width: 232px;
   padding: 12px;
 }
 
@@ -426,7 +435,7 @@ body {
   width: 100%;
   padding: var(--space-md);
   border-radius: var(--radius);
-  font-size: 12px;
+  font-size: 14px;
   background: transparent;
   border: none;
   color: #cbd3dd;
