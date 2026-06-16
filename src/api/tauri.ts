@@ -21,6 +21,7 @@ export interface StartParams {
   backend: string;
   assist: boolean;
   bgColor: string;
+  generation: number; // render id assigned by the frontend before invoking
 }
 
 // `engine-event` payloads — line-JSON the Rust side forwards verbatim from the
@@ -46,7 +47,7 @@ export const readImageDataUrl = (path: string) =>
 export const aiProcessImage = (args: { image: string; apiKey: string; model: string; prompt: string }) =>
   invoke<string>("ai_process_image", args);
 
-export const startGeneration = (p: StartParams) => invoke<number>("start_generation", { ...p });
+export const startGeneration = (p: StartParams) => invoke("start_generation", { ...p });
 
 export const stopGeneration = () => invoke("stop_generation");
 
