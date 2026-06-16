@@ -202,14 +202,19 @@ export default function App() {
   // "abnormal exit". The Rust side kills the sidecar process by pid.
   async function stop() {
     if (!running) return;
+    const stoppedGen = currentGenRef.current; // remember in case the kill fails
     setRunning(false);
+    // Invalidate the stopped render so its buffered same-gen frame/done/error
+    // events (flushed just before the kill lands) can't overwrite the stopped state.
+    currentGenRef.current = 0;
     setStatus("正在终止渲染…");
     try {
       await stopGeneration();
       setStatus("已终止渲染。");
     } catch (e) {
-      // Kill failed — the old sidecar may still be alive and emitting events, so
-      // re-lock the controls to prevent an interleaved second render.
+      // Kill failed — the sidecar is likely still alive and rendering. Restore both
+      // running and the generation so its ongoing events are honoured again.
+      currentGenRef.current = stoppedGen;
       setRunning(true);
       setStatus("终止失败，引擎可能仍在运行：" + e);
     }
