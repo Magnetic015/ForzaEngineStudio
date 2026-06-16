@@ -186,7 +186,10 @@ fn kill_pid(pid: u32) -> Result<(), String> {
             .creation_flags(CREATE_NO_WINDOW)
             .status()
             .map_err(|e| format!("taskkill failed to run: {e}"))?;
-        if status.success() {
+        // exit 128 = "process not found": the target is already gone, which is
+        // exactly the outcome stop wants (covers the race where the render finishes
+        // naturally just before stop is processed), so treat it as success.
+        if status.success() || status.code() == Some(128) {
             Ok(())
         } else {
             Err(format!("taskkill exited with {:?}", status.code()))
@@ -203,9 +206,21 @@ fn kill_pid(pid: u32) -> Result<(), String> {
             .status()
             .map_err(|e| format!("kill failed to run: {e}"))?;
         if status.success() {
-            Ok(())
-        } else {
+            return Ok(());
+        }
+        // kill failed — if the process is simply already gone (the outcome stop
+        // wants), report success. `kill -0` probes existence without signaling;
+        // a non-zero probe means no such process.
+        let still_alive = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if still_alive {
             Err(format!("kill exited with {:?}", status.code()))
+        } else {
+            Ok(())
         }
     }
 }
