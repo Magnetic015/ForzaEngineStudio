@@ -169,6 +169,16 @@ def main() -> int:
     # in sticker mode keeps the transparent-outside-silhouette preview.
     preview_background = None if args.sticker else parse_hex_color(args.bg_color)
 
+    # Bounding box of the fitted image inside the canvas (default mode: the alpha
+    # mask is a solid rect). Stored in the JSON so Import-JSON can rebuild the
+    # exact seed the engine composited over and re-mask the buffer.
+    image_rect = None
+    if not args.sticker:
+        ys, xs = np.where(alpha_mask > 0)
+        if xs.size and ys.size:
+            ox, oy = int(xs.min()), int(ys.min())
+            image_rect = (ox, oy, int(xs.max()) - ox + 1, int(ys.max()) - oy + 1)
+
     # ── Build model-assist inputs ────────────────────────────────────────────
     # Any external asset implies assist even without the master flag. Each piece
     # degrades to the local numpy approximation when no external asset is given.
@@ -266,10 +276,17 @@ def main() -> int:
                 src = Path(args.image)
                 out_path = Path(args.out) if args.out else src.with_name(src.stem + "_engine.json")
                 # Persist the hybrid under-paint so an Import-JSON reload paints
-                # the shapes over the same seed. base_canvas is only ever set in
-                # non-sticker runs (sticker seeding is skipped above for
-                # reproducibility), so this is implicitly non-sticker.
-                base_b64 = encode_png(base_canvas) if base_canvas is not None else ""
+                # the shapes over the same seed. Fill its buffer ring with the
+                # canvas colour to match the engine's actual seed (which sets
+                # alpha==0 to preview_background), so the reload reproduces the
+                # buffer too. base_canvas is only ever set in non-sticker runs.
+                if base_canvas is not None:
+                    stored_base = base_canvas.copy()
+                    if preview_background is not None:
+                        stored_base[alpha_mask == 0] = preview_background
+                    base_b64 = encode_png(stored_base)
+                else:
+                    base_b64 = ""
                 try:
                     doc = FD6Document.from_engine(
                         source_image=src.name,
@@ -280,6 +297,7 @@ def main() -> int:
                         base_image=base_b64,
                         assist=assist_meta,
                         background=preview_background,  # None in sticker mode
+                        image_rect=image_rect,          # None in sticker mode
                     )
                     save_json(doc, out_path)
                     json_path = str(out_path)
