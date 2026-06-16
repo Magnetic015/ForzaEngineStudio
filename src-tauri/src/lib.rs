@@ -46,6 +46,7 @@ fn start_generation(
     sticker: bool,
     backend: String,
     assist: bool,
+    quality: u32,
     bg_color: String,
     generation: u64,
 ) -> Result<(), String> {
@@ -65,6 +66,7 @@ fn start_generation(
         .arg("--canvas-height").arg(canvas_height.to_string())
         .arg("--bg-color").arg(&bg_color)
         .arg("--backend").arg(&backend)
+        .arg("--quality").arg(quality.to_string())
         .current_dir(&py_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

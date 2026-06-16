@@ -18,6 +18,8 @@ export interface ProgressState {
 export interface TopBarProps {
   stopAt: number;
   setStopAt: (v: number) => void;
+  quality: number;
+  setQuality: (n: number) => void;
   canvasWidth: number;
   setCanvasWidth: (v: number) => void;
   canvasHeight: number;
