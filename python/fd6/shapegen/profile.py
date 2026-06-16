@@ -25,6 +25,14 @@ class Profile:
     # (colour, alpha) over only the pixels where it stays visible in the final
     # stack. Off by default (a no-op for the live stream until enabled).
     refit_final: bool = False
+    # Coverage-aware polish only re-fits a shape whose visible (topmost) body is
+    # at least this fraction of its area (see Engine._refit_colors_coverage_aware).
+    refit_min_visible: float = 0.6
+    # Residual-guided sampling: fraction of candidate centers drawn toward the
+    # cells that still differ most from the target (see sampling.sample_centers).
+    guided_fraction: float = 0.7
+    # Per-shape alpha sweep evaluated when committing a shape (scoring.composite_optimal).
+    alpha_levels: tuple = (60, 90, 120, 150, 180, 210, 235, 255)
     # Compute backend for the shape search: "auto" (GPU if a CUDA device + CuPy
     # are present, else CPU), "cpu" (force the multiprocess CPU path), or "gpu"
     # (force CuPy; silently falls back to CPU if unavailable or it errors).

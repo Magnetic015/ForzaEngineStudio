@@ -15,6 +15,7 @@ export interface Cand {
 export interface StartParams {
   image: string;
   stopAt: number;
+  quality: number;
   canvasWidth: number;
   canvasHeight: number;
   sticker: boolean;

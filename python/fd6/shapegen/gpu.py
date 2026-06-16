@@ -421,7 +421,8 @@ class OpenCLEllipseSearcher:
 
     def search(self, canvas: np.ndarray, n_random: int, n_mutate: int,
                max_size_frac: Optional[float], rng: random.Random,
-               center_cdf: Optional[tuple] = None) -> tuple[float, Optional[Shape]]:
+               center_cdf: Optional[tuple] = None,
+               guided_fraction: float = 0.7) -> tuple[float, Optional[Shape]]:
         cl = self.cl
         cur = np.ascontiguousarray(canvas, dtype=np.float32)
         cl.enqueue_copy(self.queue, self._buf_canvas, cur.ravel())
@@ -434,7 +435,8 @@ class OpenCLEllipseSearcher:
             from fd6.shapegen.sampling import sample_centers
             cdf, gy, gx = center_cdf
             cxa, cya = sample_centers(cdf, gy, gx, self.w, self.h,
-                                      params.shape[0], rng.randint(0, 2**31 - 1))
+                                      params.shape[0], rng.randint(0, 2**31 - 1),
+                                      p_guided=guided_fraction)
             params[:, 0] = cxa
             params[:, 1] = cya
         scores = self._score(params, full_sq, self._tile_for(params, self.w, self.h))

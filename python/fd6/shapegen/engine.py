@@ -172,7 +172,7 @@ def _worker_independent_search(args: tuple) -> tuple:
     Result is mathematically identical; just no longer recomputed N times.
     """
     try:
-        (types, n_random, n_mutate, w, h, seed, max_size_frac, center_cdf) = args
+        (types, n_random, n_mutate, w, h, seed, max_size_frac, center_cdf, guided_fraction) = args
         canvas = _W_CANVAS
         target = _W_TARGET
         alpha = _W_ALPHA
@@ -188,7 +188,8 @@ def _worker_independent_search(args: tuple) -> tuple:
         n_rand = max(1, n_random)
         if center_cdf is not None:
             cdf, gy, gx = center_cdf
-            cxa, cya = sample_centers(cdf, gy, gx, w, h, n_rand, seed ^ 0x9E3779B1)
+            cxa, cya = sample_centers(cdf, gy, gx, w, h, n_rand, seed ^ 0x9E3779B1,
+                                      p_guided=guided_fraction)
 
         # Random search
         best_score = float("inf")
@@ -514,10 +515,11 @@ class Engine:
             # that a later translucent layer covers would bleed its new colour up
             # through that layer (perceptible haze for a marginal RMS gain), so
             # those keep the colour generation already gave them.
-            if body_n > 0 and visible_body / body_n >= self.REFIT_MIN_VISIBLE:
+            if body_n > 0 and visible_body / body_n >= self.profile.refit_min_visible:
                 visible = np.where(owner[y0:y1, x0:x1] == i, mask_local, np.uint8(0))
                 canvas, _ = composite_optimal(
                     canvas, s, self.target, self.alpha_mask, self.edge_weight,
+                    alpha_levels=self.profile.alpha_levels,
                     fit_mask_local=visible,
                 )
             else:
@@ -564,7 +566,8 @@ class Engine:
         n_mutate = max(1, n_mutate)
         args_list = [
             (types, n_random, n_mutate, self.w, self.h,
-             self.rng.randint(0, 2**31 - 1), max_size_frac, center_cdf)
+             self.rng.randint(0, 2**31 - 1), max_size_frac, center_cdf,
+             self.profile.guided_fraction)
             for _ in range(self._n_workers)
         ]
         best_score = float("inf")
@@ -608,7 +611,8 @@ class Engine:
         if self._backend == "gpu" and self._gpu is not None:
             try:
                 return self._gpu.search(self.canvas, n_random, n_mutate, max_size_frac,
-                                        self.rng, center_cdf=center_cdf)
+                                        self.rng, center_cdf=center_cdf,
+                                        guided_fraction=self.profile.guided_fraction)
             except Exception as exc:
                 # One-time graceful degrade — never crash a render over the GPU.
                 self._backend = "cpu"
@@ -705,7 +709,8 @@ class Engine:
                 # Commit. Update shared canvas in place so next iteration's
                 # workers see the new state on their next read. composite_optimal
                 # also picks the per-shape alpha that fits the region best.
-                new_canvas, new_rms = composite_optimal(self.canvas, refined, self.target, self.alpha_mask, self.edge_weight)
+                new_canvas, new_rms = composite_optimal(self.canvas, refined, self.target, self.alpha_mask, self.edge_weight,
+                                                        alpha_levels=self.profile.alpha_levels)
                 self.canvas[:] = new_canvas
                 self.rms = new_rms
                 self.shapes.append(refined)
