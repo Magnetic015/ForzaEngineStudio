@@ -12,9 +12,6 @@ use tauri::{AppHandle, Emitter};
 #[derive(Default)]
 struct EngineState {
     pid: Arc<Mutex<Option<u32>>>,
-    // Monotonic render id. Tagged onto `exit` events so the frontend can ignore a
-    // stopped render's late exit instead of mistaking it for a new render crashing.
-    gen: Arc<Mutex<u64>>,
 }
 
 /// Locate the vendored `python/` dir (sibling of `src-tauri/`).
@@ -50,7 +47,8 @@ fn start_generation(
     backend: String,
     assist: bool,
     bg_color: String,
-) -> Result<u64, String> {
+    generation: u64,
+) -> Result<(), String> {
     let py_dir = project_python_dir();
     let script = py_dir.join("sidecar.py");
     if !script.exists() {
@@ -96,18 +94,12 @@ fn start_generation(
         .spawn()
         .map_err(|e| format!("failed to start sidecar ({}): {e}", python.display()))?;
 
-    // Bump the render generation up front so every forwarded event can be tagged
-    // with it; the frontend drops events whose gen isn't the live render's.
-    let my_gen = {
-        let mut g = state.gen.lock().unwrap();
-        *g += 1;
-        *g
-    };
-
     let stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
-    // stdout: one JSON event per line -> tag with `gen` and forward to the frontend.
+    // stdout: one JSON event per line -> tag with the caller's `generation` and
+    // forward to the frontend. The frontend assigns the gen before invoking, so
+    // even events emitted during startup carry the gen it is already filtering on.
     let app_out = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -116,7 +108,7 @@ fn start_generation(
                 Ok(l) if !l.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&l) {
                     Ok(mut v) => {
                         if let Some(obj) = v.as_object_mut() {
-                            obj.insert("gen".into(), serde_json::json!(my_gen));
+                            obj.insert("gen".into(), serde_json::json!(generation));
                         }
                         let _ = app_out.emit("engine-event", v);
                     }
@@ -162,13 +154,13 @@ fn start_generation(
             if !status.success() {
                 let _ = app_wait.emit(
                     "engine-event",
-                    serde_json::json!({"type":"exit","code": status.code(),"gen": my_gen}),
+                    serde_json::json!({"type":"exit","code": status.code(),"gen": generation}),
                 );
             }
         }
     });
 
-    Ok(my_gen)
+    Ok(())
 }
 
 /// Stop the in-flight generation: terminate the sidecar process tree by pid.

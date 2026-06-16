@@ -46,9 +46,11 @@ export default function App() {
     runningRef.current = on;
     setRunningState(on);
   };
-  // Generation of the live render (returned by start_generation). A stopped
-  // render's late `exit` carries an older gen and is ignored, so a quick
-  // Stop→Start can't let the old kill flip the new render off.
+  // Render generation bookkeeping. `genCounterRef` is the monotonic source; each
+  // start takes the next id, publishes it to `currentGenRef` BEFORE invoking (so
+  // startup events already match), and passes it to Rust. The event handler drops
+  // events whose gen ≠ the live render's; stop resets currentGenRef to 0.
+  const genCounterRef = useRef(0);
   const currentGenRef = useRef(0);
   const [aiRunning, setAiRunning] = useState(false);
 
@@ -174,13 +176,19 @@ export default function App() {
     const safeStopAt = intOrDefault(stopAt, 3000);
     const safeW = intOrDefault(canvasWidth, 1000);
     const safeH = intOrDefault(canvasHeight, 1000);
+    // Assign and publish the generation BEFORE invoking, so events the Rust stdout
+    // thread forwards during startup (e.g. an engine-init error) already match
+    // currentGenRef instead of being dropped by the gen guard.
+    const gen = genCounterRef.current + 1;
+    genCounterRef.current = gen;
+    currentGenRef.current = gen;
     setRunning(true);
     setStatus(
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
     );
     setProgress({ n: 0, total: safeStopAt, rms: 0 });
     try {
-      const gen = await startGeneration({
+      await startGeneration({
         image: src,
         stopAt: safeStopAt,
         canvasWidth: safeW,
@@ -189,9 +197,10 @@ export default function App() {
         backend,
         assist,
         bgColor,
+        generation: gen,
       });
-      currentGenRef.current = gen;
     } catch (e) {
+      currentGenRef.current = 0;
       setStatus("启动失败：" + e);
       setRunning(false);
     }
