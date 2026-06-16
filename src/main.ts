@@ -50,6 +50,16 @@ function updateAiBtn() {
   if (btn) btn.disabled = aiRunning || running || !hasTarget() || !key || !prompt;
 }
 
+// The background-fill colour only applies to 默认模式 (the buffer ring around the
+// fitted image). In 贴纸模式 the buffer stays transparent, so grey the picker out.
+function updateBgColorEnabled() {
+  const sticker = (($("sticker-mode") as HTMLSelectElement | null)?.value || "default") === "sticker";
+  const input = $("bg-color") as HTMLInputElement | null;
+  const field = $("bg-color-field");
+  if (input) input.disabled = sticker;
+  if (field) field.classList.toggle("is-disabled", sticker);
+}
+
 // ── candidate strip + target image ───────────────────────────────────────────
 function renderCandidates() {
   const strip = $("candidates");
@@ -211,11 +221,12 @@ async function start() {
   const sticker = (($("sticker-mode") as HTMLSelectElement | null)?.value || "default") === "sticker";
   const backend = ($("backend-select") as HTMLSelectElement | null)?.value || "gpu";
   const assist = (($("assist-mode") as HTMLSelectElement | null)?.value || "off") === "on";
+  const bgColor = ($("bg-color") as HTMLInputElement | null)?.value || "#ffffff";
   setRunning(true);
   setStatus(`正在启动引擎…（目标图：${selectedCand()?.label || ""}，画布 ${canvasWidth}×${canvasHeight}${assist ? " · 模型协助" : ""}）`);
   setProgress(0, stopAt, 0);
   try {
-    await invoke("start_generation", { image: src, stopAt, canvasWidth, canvasHeight, sticker, backend, assist });
+    await invoke("start_generation", { image: src, stopAt, canvasWidth, canvasHeight, sticker, backend, assist, bgColor });
   } catch (e) {
     setStatus("启动失败：" + e);
     setRunning(false);
@@ -330,6 +341,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("ai-btn")?.addEventListener("click", aiProcess);
   $("ai-key")?.addEventListener("input", updateAiBtn);
   $("ai-prompt")?.addEventListener("input", updateAiBtn);
+  $("sticker-mode")?.addEventListener("change", updateBgColorEnabled);
 
   // textarea: Enter sends, Shift+Enter newline
   $("ai-prompt")?.addEventListener("keydown", (e) => {
@@ -365,5 +377,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setupSplitter();
   selectModel(currentModel);
   renderCandidates();
+  updateBgColorEnabled();
   setRunning(false);
 });
