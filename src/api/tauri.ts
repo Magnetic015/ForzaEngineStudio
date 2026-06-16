@@ -33,7 +33,7 @@ export type EngineEvent =
   | { type: "frame"; shape_count: number; total: number; rms: number; png?: string }
   | { type: "done"; shape_count: number; total?: number; rms: number; png?: string; json_path: string }
   | { type: "error"; message: string }
-  | { type: "exit"; code: number | null }
+  | { type: "exit"; code: number | null; gen?: number }
   | { type: "log"; message: string };
 
 // ── Tauri command wrappers ────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export const readImageDataUrl = (path: string) =>
 export const aiProcessImage = (args: { image: string; apiKey: string; model: string; prompt: string }) =>
   invoke<string>("ai_process_image", args);
 
-export const startGeneration = (p: StartParams) => invoke("start_generation", { ...p });
+export const startGeneration = (p: StartParams) => invoke<number>("start_generation", { ...p });
 
 export const stopGeneration = () => invoke("stop_generation");
 

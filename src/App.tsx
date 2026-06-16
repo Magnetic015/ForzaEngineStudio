@@ -46,6 +46,10 @@ export default function App() {
     runningRef.current = on;
     setRunningState(on);
   };
+  // Generation of the live render (returned by start_generation). A stopped
+  // render's late `exit` carries an older gen and is ignored, so a quick
+  // Stop→Start can't let the old kill flip the new render off.
+  const currentGenRef = useRef(0);
   const [aiRunning, setAiRunning] = useState(false);
 
   // top-bar controls
@@ -176,7 +180,7 @@ export default function App() {
     );
     setProgress({ n: 0, total: safeStopAt, rms: 0 });
     try {
-      await startGeneration({
+      const gen = await startGeneration({
         image: src,
         stopAt: safeStopAt,
         canvasWidth: safeW,
@@ -186,6 +190,7 @@ export default function App() {
         assist,
         bgColor,
       });
+      currentGenRef.current = gen;
     } catch (e) {
       setStatus("启动失败：" + e);
       setRunning(false);
@@ -265,6 +270,9 @@ export default function App() {
         setRunning(false);
         break;
       case "exit":
+        // Ignore a stopped render's late exit: its gen is older than the live
+        // render, so it must not flip a freshly started render off.
+        if (p.gen !== undefined && p.gen !== currentGenRef.current) break;
         if (runningRef.current) {
           setStatus("引擎进程异常退出（code " + p.code + "）。请查看控制台日志。");
           setRunning(false);
