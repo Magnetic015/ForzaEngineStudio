@@ -33,21 +33,21 @@ class Ellipse(Shape):
         mask = (dx[None, :] ** 2 + dy[:, None] ** 2) <= 1.0
         return (mask.astype(np.uint8) * 255), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "Ellipse":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "Ellipse":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         which = rng.randint(0, 2)
         if which == 0:
-            new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 16), 0, h - 1)
+            new.x = _clamp(new.x + rng.gauss(0, 16 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 16 * scale), 0, h - 1)
         elif which == 1:
-            new.rx = _clamp(new.rx + rng.gauss(0, 16), 1, w)
-            new.ry = _clamp(new.ry + rng.gauss(0, 16), 1, h)
+            new.rx = _clamp(new.rx + rng.gauss(0, 16 * scale), 1, w)
+            new.ry = _clamp(new.ry + rng.gauss(0, 16 * scale), 1, h)
         else:
-            new.x = _clamp(new.x + rng.gauss(0, 8), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 8), 0, h - 1)
-            new.rx = _clamp(new.rx + rng.gauss(0, 8), 1, w)
-            new.ry = _clamp(new.ry + rng.gauss(0, 8), 1, h)
+            new.x = _clamp(new.x + rng.gauss(0, 8 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 8 * scale), 0, h - 1)
+            new.rx = _clamp(new.rx + rng.gauss(0, 8 * scale), 1, w)
+            new.ry = _clamp(new.ry + rng.gauss(0, 8 * scale), 1, h)
         return new
 
     def to_json(self) -> dict:
@@ -115,22 +115,22 @@ class RotatedEllipse(Shape):
         mask = (dx ** 2 + dy ** 2) <= 1.0
         return (mask.astype(np.uint8) * 255), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "RotatedEllipse":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "RotatedEllipse":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         which = rng.randint(0, 3)
         if which == 0:
-            new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 16), 0, h - 1)
+            new.x = _clamp(new.x + rng.gauss(0, 16 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 16 * scale), 0, h - 1)
         elif which == 1:
-            new.rx = _clamp(new.rx + rng.gauss(0, 16), 1, w)
-            new.ry = _clamp(new.ry + rng.gauss(0, 16), 1, h)
+            new.rx = _clamp(new.rx + rng.gauss(0, 16 * scale), 1, w)
+            new.ry = _clamp(new.ry + rng.gauss(0, 16 * scale), 1, h)
         elif which == 2:
-            new.angle = (new.angle + rng.gauss(0, 25)) % 180.0
+            new.angle = (new.angle + rng.gauss(0, 25 * scale)) % 180.0
         else:
-            new.x = _clamp(new.x + rng.gauss(0, 8), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 8), 0, h - 1)
-            new.angle = (new.angle + rng.gauss(0, 15)) % 180.0
+            new.x = _clamp(new.x + rng.gauss(0, 8 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 8 * scale), 0, h - 1)
+            new.angle = (new.angle + rng.gauss(0, 15 * scale)) % 180.0
         return new
 
     def to_json(self) -> dict:

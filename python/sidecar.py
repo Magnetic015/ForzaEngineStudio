@@ -132,6 +132,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
+    # Coverage-aware colour polish after generation (a few % lower error at the
+    # same layer count, no extra layers). On by default; --no-refit disables it.
+    ap.add_argument("--refit", action=argparse.BooleanOptionalAction, default=True,
+                    help="coverage-aware colour polish of the final shapes")
     # Default-mode canvas fill colour for the fit-buffer ring (the visible W×H
     # frame around the image). Ignored in sticker mode (transparency preserved).
     ap.add_argument("--bg-color", default="#ffffff",
@@ -244,6 +248,7 @@ def main() -> int:
         preview_every=preview_every,
         compute_backend=args.backend,         # default GPU (OpenCL); engine auto-falls back to CPU if unavailable
         shape_types=["rotated_ellipse"],
+        refit_final=args.refit,
     )
 
     try:

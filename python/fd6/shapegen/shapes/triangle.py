@@ -43,11 +43,11 @@ class Triangle(Shape):
         mask = ~(has_neg & has_pos)
         return (mask.astype(np.uint8) * 255), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "Triangle":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "Triangle":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         vertex = rng.randint(0, 2)
-        dx, dy = rng.gauss(0, 16), rng.gauss(0, 16)
+        dx, dy = rng.gauss(0, 16 * scale), rng.gauss(0, 16 * scale)
         if vertex == 0:
             new.x1 = _clamp(new.x1 + dx, 0, w - 1)
             new.y1 = _clamp(new.y1 + dy, 0, h - 1)

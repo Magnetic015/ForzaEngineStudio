@@ -21,6 +21,10 @@ class Profile:
     save_every: int = 100
     stop_at: int = 3000
     shape_types: list[str] = field(default_factory=lambda: ["rotated_ellipse"])
+    # Coverage-aware colour polish after generation: re-solve each shape's
+    # (colour, alpha) over only the pixels where it stays visible in the final
+    # stack. Off by default (a no-op for the live stream until enabled).
+    refit_final: bool = False
     # Compute backend for the shape search: "auto" (GPU if a CUDA device + CuPy
     # are present, else CPU), "cpu" (force the multiprocess CPU path), or "gpu"
     # (force CuPy; silently falls back to CPU if unavailable or it errors).
