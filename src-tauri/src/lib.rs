@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Tracks the currently running generation sidecar so `stop_generation` can kill
 /// it. Holds the OS pid (cleared by the reaper when the process ends). Only one
@@ -87,6 +87,12 @@ fn start_generation(
         .spawn()
         .map_err(|e| format!("failed to start sidecar ({}): {e}", python.display()))?;
 
+    // Record the pid immediately — before taking pipes or spawning reader threads
+    // — so the exit hook (and `stop_generation`) can always find a just-started
+    // sidecar. Recording it later leaves a window where app exit races startup and
+    // orphans the render, which is exactly the GPU leak the exit hook prevents.
+    *state.pid.lock().unwrap() = Some(child.id());
+
     let stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
@@ -126,9 +132,6 @@ fn start_generation(
             }
         }
     });
-
-    // Record the pid so `stop_generation` can terminate this run on request.
-    *state.pid.lock().unwrap() = Some(child.id());
 
     // Reap the child; clear our pid slot and report abnormal exit — this covers
     // both a crash and a user-initiated stop — so the UI can unstick itself. The
@@ -370,6 +373,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(EngineState::default())
         .invoke_handler(tauri::generate_handler![start_generation, stop_generation, ai_process_image, read_image_data_url, import_json])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // App is shutting down: kill any still-running sidecar so its GPU
+            // (OpenCL context + VRAM) and worker tree are released instead of
+            // leaking as an orphan that keeps the GPU busy. Best-effort — there is
+            // no UI left to surface an error to. `ExitRequested` fires when the
+            // last window closes; `Exit` is the final stop for every exit path.
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                let pid = *app_handle.state::<EngineState>().pid.lock().unwrap();
+                if let Some(pid) = pid {
+                    let _ = kill_pid(pid);
+                }
+            }
+            _ => {}
+        });
 }
