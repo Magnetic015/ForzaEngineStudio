@@ -1,0 +1,1 @@
+# Keep the Tauri resource dir present at build time. PyInstaller fills this dir; real contents are git-ignored. See RELEASE.md.
