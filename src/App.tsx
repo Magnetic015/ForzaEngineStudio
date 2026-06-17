@@ -14,7 +14,7 @@ import {
   type Cand,
   type EngineEvent,
 } from "./api/tauri";
-import { type ProgressState } from "./types";
+import { type ProgressState, type RmsPoint } from "./types";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { useSplitter } from "./hooks/useSplitter";
 import TopBar from "./components/TopBar";
@@ -75,6 +75,9 @@ export default function App() {
   const [status, setStatus] = useState(READY_STATUS);
   const [progress, setProgress] = useState<ProgressState>({ n: 0, total: 0, rms: 0 });
   const [previewSrc, setPreviewSrc] = useState("");
+  // Live RMS curve for the preview overlay; appended per progress/frame event,
+  // cleared on Start/Reset. Kept monotonic in shape count (see pushRms).
+  const [rmsHistory, setRmsHistory] = useState<RmsPoint[]>([]);
 
   // crop modal
   const [cropOpen, setCropOpen] = useState(false);
@@ -201,6 +204,7 @@ export default function App() {
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
     );
     setProgress({ n: 0, total: safeStopAt, rms: 0 });
+    setRmsHistory([]); // fresh curve for the new render
     try {
       await startGeneration({
         image: src,
@@ -268,6 +272,7 @@ export default function App() {
   function resetPreview() {
     if (running) return;
     setPreviewSrc("");
+    setRmsHistory([]);
     setProgress({ n: 0, total: 0, rms: 0 });
     setSavedJsonPath("");
     setStatus(READY_STATUS);
@@ -313,6 +318,13 @@ export default function App() {
     }
   }
 
+  // Append one RMS sample for the preview sparkline. Shape count is monotonic, so
+  // drop any out-of-order/duplicate event (progress + frame can report the same n).
+  const pushRms = (n: number, rms: number) => {
+    if (!Number.isFinite(n) || !Number.isFinite(rms)) return;
+    setRmsHistory((h) => (h.length && n <= h[h.length - 1].n ? h : [...h, { n, rms }]));
+  };
+
   // ── engine event stream ───────────────────────────────────────────────────────
   useEngineEvents((p: EngineEvent) => {
     // Drop events from a superseded render: after a Stop→Start, the old sidecar's
@@ -330,14 +342,17 @@ export default function App() {
       }
       case "progress":
         setProgress({ n: p.shape_count, total: p.total, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         break;
       case "frame":
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         break;
       case "done":
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total ?? p.shape_count, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         // Only a real saved path (not a "(save failed: …)" marker) enables 打开保存目录.
         if (p.json_path && !p.json_path.startsWith("(")) setSavedJsonPath(p.json_path);
         setStatus(
@@ -454,6 +469,7 @@ export default function App() {
         <section className="right">
           <PreviewPane
             previewSrc={previewSrc}
+            rmsHistory={rmsHistory}
             running={running}
             canStart={canStart}
             savedJsonPath={savedJsonPath}
