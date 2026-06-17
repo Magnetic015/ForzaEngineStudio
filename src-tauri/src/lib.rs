@@ -14,9 +14,9 @@ struct EngineState {
     pid: Arc<Mutex<Option<u32>>>,
 }
 
-/// Locate the vendored `python/` dir (sibling of `src-tauri/`).
-/// NOTE: uses CARGO_MANIFEST_DIR — valid for `tauri dev`. For a bundled release
-/// this should switch to a resource path; out of scope for the dev MVP.
+/// Locate the vendored `python/` dir (sibling of `src-tauri/`) for a DEV run.
+/// Uses CARGO_MANIFEST_DIR — valid under `tauri dev`. A packaged release instead
+/// spawns the frozen `fes-engine` exe shipped as a resource (see `engine_command`).
 fn project_python_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -30,6 +30,53 @@ fn venv_python(py_dir: &Path) -> PathBuf {
     } else {
         py_dir.join(".venv").join("bin").join("python")
     }
+}
+
+/// Resolve the frozen sidecar exe shipped as a Tauri resource, if present.
+/// Returns `Some(path)` only for a packaged/installed app (where `tauri build`
+/// copied `pyengine/fes-engine/` under the resource dir); `None` under
+/// `tauri dev` or a bare `cargo run`, so callers fall back to the dev venv.
+fn bundled_engine_exe(app: &AppHandle) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) { "fes-engine.exe" } else { "fes-engine" };
+    let exe = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("pyengine")
+        .join("fes-engine")
+        .join(exe_name);
+    exe.exists().then_some(exe)
+}
+
+/// Build the base `Command` for an engine tool, transparently handling both a
+/// packaged release (the frozen `fes-engine` exe + a `subcommand` verb) and a
+/// dev run (the vendored `python/.venv` + the loose `dev_script`). The caller
+/// appends the tool-specific flags and the stdio/`creation_flags` config.
+/// `subcommand` is the dispatcher verb ("generate" | "ai" | "render-json");
+/// `dev_script` is the matching loose script name.
+fn engine_command(app: &AppHandle, subcommand: &str, dev_script: &str) -> Result<Command, String> {
+    if let Some(exe) = bundled_engine_exe(app) {
+        let mut cmd = Command::new(&exe);
+        cmd.arg(subcommand);
+        // Anchor CWD to the frozen exe's own dir (symmetry with the dev branch,
+        // which uses python/). Every path we pass is absolute today, so this is
+        // defensive: it keeps a future relative path from silently breaking in a
+        // bundled install, where the inherited CWD is the shortcut's target.
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        return Ok(cmd);
+    }
+    let py_dir = project_python_dir();
+    let script = py_dir.join(dev_script);
+    if !script.exists() {
+        return Err(format!("{dev_script} not found: {}", script.display()));
+    }
+    let venv = venv_python(&py_dir);
+    let python = if venv.exists() { venv } else { PathBuf::from("python") };
+    let mut cmd = Command::new(python);
+    cmd.arg(&script).current_dir(&py_dir);
+    Ok(cmd)
 }
 
 /// App-data output dirs for app-generated assets: `<app_data>/images` and
@@ -85,21 +132,12 @@ fn start_generation(
     bg_color: String,
     generation: u64,
 ) -> Result<(), String> {
-    let py_dir = project_python_dir();
-    let script = py_dir.join("sidecar.py");
-    if !script.exists() {
-        return Err(format!("sidecar not found: {}", script.display()));
-    }
-    let venv = venv_python(&py_dir);
-    let python = if venv.exists() { venv } else { PathBuf::from("python") };
-
     // Generated shape JSON goes to the app-data data dir, named <source>_<ts>.json.
     let (_, data_dir) = output_dirs(&app)?;
     let out_json = data_dir.join(timestamped_name(&image, "json"));
 
-    let mut cmd = Command::new(&python);
-    cmd.arg(&script)
-        .arg("--image").arg(&image)
+    let mut cmd = engine_command(&app, "generate", "sidecar.py")?;
+    cmd.arg("--image").arg(&image)
         .arg("--stop-at").arg(stop_at.to_string())
         .arg("--canvas-width").arg(canvas_width.to_string())
         .arg("--canvas-height").arg(canvas_height.to_string())
@@ -107,7 +145,6 @@ fn start_generation(
         .arg("--backend").arg(&backend)
         .arg("--quality").arg(quality.to_string())
         .arg("--out").arg(&out_json)
-        .current_dir(&py_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if sticker {
@@ -127,7 +164,7 @@ fn start_generation(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to start sidecar ({}): {e}", python.display()))?;
+        .map_err(|e| format!("failed to start engine sidecar: {e}"))?;
 
     // Record the pid immediately — before taking pipes or spawning reader threads
     // — so the exit hook (and `stop_generation`) can always find a just-started
@@ -259,22 +296,12 @@ async fn ai_process_image(
     let (images_dir, _) = output_dirs(&app)?;
     let out_png = images_dir.join(timestamped_name(&image, "png"));
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let py_dir = project_python_dir();
-        let script = py_dir.join("image_process.py");
-        if !script.exists() {
-            return Err(format!("image_process.py not found: {}", script.display()));
-        }
-        let venv = venv_python(&py_dir);
-        let python = if venv.exists() { venv } else { PathBuf::from("python") };
-
-        let mut cmd = Command::new(&python);
-        cmd.arg(&script)
-            .arg("--image").arg(&image)
+        let mut cmd = engine_command(&app, "ai", "image_process.py")?;
+        cmd.arg("--image").arg(&image)
             .arg("--api-key").arg(&api_key)
             .arg("--model").arg(&model)
             .arg("--prompt").arg(&prompt)
             .arg("--out").arg(&out_png)
-            .current_dir(&py_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
@@ -355,20 +382,10 @@ async fn read_image_data_url(path: String) -> Result<String, String> {
 /// Import an existing FD6 shape JSON: render it to a PNG and return a data URL
 /// for the preview pane. Runs the `render_json.py` helper on the blocking pool.
 #[tauri::command]
-async fn import_json(json_path: String) -> Result<String, String> {
+async fn import_json(app: AppHandle, json_path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let py_dir = project_python_dir();
-        let script = py_dir.join("render_json.py");
-        if !script.exists() {
-            return Err(format!("render_json.py not found: {}", script.display()));
-        }
-        let venv = venv_python(&py_dir);
-        let python = if venv.exists() { venv } else { PathBuf::from("python") };
-
-        let mut cmd = Command::new(&python);
-        cmd.arg(&script)
-            .arg("--json").arg(&json_path)
-            .current_dir(&py_dir)
+        let mut cmd = engine_command(&app, "render-json", "render_json.py")?;
+        cmd.arg("--json").arg(&json_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
