@@ -300,7 +300,7 @@ __kernel void score_ellipses(
             if ((xr/rx)*(xr/rx) + (yr/ry)*(yr/ry) > 1.0f) continue;
             int idx = gy*W + gx;
             float al = has_alpha ? alpha[idx] : 255.0f;
-            float eff = al / 255.0f;
+            float eff = (al / 255.0f) * edge[idx];
             if (eff <= 0.0f) continue;
             int c3 = idx*3;
             eff_sum += eff;
@@ -332,9 +332,11 @@ __kernel void score_ellipses(
             int c3 = idx*3;
             float curR=canvas[c3], curG=canvas[c3+1], curB=canvas[c3+2];
             float tgR=target[c3], tgG=target[c3+1], tgB=target[c3+2];
-            float bR = a*colR + (1.0f-a)*curR;
-            float bG = a*colG + (1.0f-a)*curG;
-            float bB = a*colB + (1.0f-a)*curB;
+            float al = has_alpha ? alpha[idx] : 255.0f;
+            float paint = al / 255.0f;
+            float bR = paint*(a*colR + (1.0f-a)*curR) + (1.0f-paint)*curR;
+            float bG = paint*(a*colG + (1.0f-a)*curG) + (1.0f-paint)*curG;
+            float bB = paint*(a*colB + (1.0f-a)*curB) + (1.0f-paint)*curB;
             float oR=curR-tgR, oG=curG-tgG, oB=curB-tgB;
             float nR=bR-tgR, nG=bG-tgG, nB=bB-tgB;
             region_old += wgt*(oR*oR+oG*oG+oB*oB);
@@ -654,16 +656,17 @@ class EllipseBatchSearcher:
         a = _SEARCH_ALPHA
         # Closed-form optimal color over the effective-masked region. The
         # weight<0.5 guard matches compute_optimal_color exactly.
-        eff_sum = eff.sum(axis=(1, 2))                   # (B,)
+        color_eff = eff * edge_t
+        eff_sum = color_eff.sum(axis=(1, 2))             # (B,)
         denom = eff_sum * a
-        numer = (eff[..., None] * (tgt_t - (1.0 - a) * cur_t)).sum(axis=(1, 2))  # (B,3)
+        numer = (color_eff[..., None] * (tgt_t - (1.0 - a) * cur_t)).sum(axis=(1, 2))  # (B,3)
         safe = eff_sum > 0.5
         d = xp.where(safe, denom, xp.float32(1.0))[:, None]
         color = xp.where(safe[:, None], xp.clip(numer / d, 0, 255), 0.0)
         color = xp.floor(color)  # match compute_optimal_color's int32 truncation
 
         # Blended tile with that color, then edge-weighted region delta.
-        m = mask[..., None]
+        m = eff[..., None]
         blended = m * (a * color[:, None, None, :] + (1.0 - a) * cur_t) + (1.0 - m) * cur_t
         w_t = edge_t[..., None]
         region_old = (w_t * (cur_t - tgt_t) ** 2).sum(axis=(1, 2, 3))   # (B,)
