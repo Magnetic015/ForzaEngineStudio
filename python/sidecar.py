@@ -190,7 +190,8 @@ def main() -> int:
     ap.add_argument("--assist-importance", action=argparse.BooleanOptionalAction, default=True,
                     help="bias shape placement with a saliency/structure importance map")
     ap.add_argument("--assist-levels", type=int, default=12,
-                    help="posterize level count for render-optimization / base")
+                    help="posterize level count for render-optimization / base "
+                         "(only used when --assist-simplify or --assist-base is enabled)")
     ap.add_argument("--base-image", default="",
                     help="external under-paint image (e.g. an image-model flattened render)")
     ap.add_argument("--importance-map", default="",
