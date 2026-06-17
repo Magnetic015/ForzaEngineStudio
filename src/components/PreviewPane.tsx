@@ -3,13 +3,15 @@
 // the AI composer (left panel).
 import { Button } from "@douyinfe/semi-ui";
 import type { PreviewPaneProps } from "../types";
+import RmsChart from "./RmsChart";
 
 export default function PreviewPane(props: PreviewPaneProps) {
-  const { previewSrc, running, canStart, savedJsonPath, onOpenSaveDir, onStart, onStop, onImportJson, onResetPreview } =
+  const { previewSrc, rmsHistory, running, canStart, savedJsonPath, onOpenSaveDir, onStart, onStop, onImportJson, onResetPreview } =
     props;
   return (
     <>
       <div className="preview-toolbar">
+        {running && <RmsChart data={rmsHistory} />}
         {savedJsonPath && (
           <Button theme="light" type="tertiary" onClick={onOpenSaveDir}>
             打开保存目录
