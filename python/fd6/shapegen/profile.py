@@ -37,6 +37,14 @@ class Profile:
     # are present, else CPU), "cpu" (force the multiprocess CPU path), or "gpu"
     # (force CuPy; silently falls back to CPU if unavailable or it errors).
     compute_backend: str = "auto"
+    # Shape-size schedule: the max ellipse dimension (as a fraction of the canvas)
+    # allowed at progress tiers <25% / <50% / <75% / >=75% of the layer budget.
+    # Monotonically decreasing — big tonal blocks early, fine detail late. Both
+    # backends honour it via max_size_frac. Default reproduces the long-standing
+    # 0.30→0.10 schedule; a steeper tail (e.g. ...,0.04) pushes more of the budget
+    # onto pixel-scale detail for high-frequency targets. See
+    # Engine._max_size_frac_for_progress.
+    size_caps: tuple = (0.30, 0.22, 0.15, 0.10)
     # Game-faithful OPAQUE mode. The livery injector (ds_v9) draws every shape as
     # a SOLID layer — it discards per-shape alpha (writes RGBA with alpha forced
     # to 255) and seeds no under-paint, so the in-game render is opaque
