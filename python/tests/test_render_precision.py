@@ -9,6 +9,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fd6.shapegen.gpu import EllipseBatchSearcher  # noqa: E402
+from fd6.shapegen.sampling import build_center_cdf  # noqa: E402
 from fd6.shapegen.scoring import compute_optimal_color, precompute_canvas_error, score_shape  # noqa: E402
 from fd6.shapegen.shapes.ellipse import RotatedEllipse  # noqa: E402
 
@@ -65,3 +66,21 @@ def test_gpu_batch_score_matches_cpu_with_weighted_color_and_alpha_clip():
 
     assert math.isfinite(cpu_score) and math.isfinite(gpu_score)
     assert abs(cpu_score - gpu_score) < 0.05
+
+
+def test_center_cdf_biases_toward_edge_weighted_residual():
+    """Importance-weighted candidate placement: with the same residual
+    everywhere, the half of the canvas with higher edge weight should pull
+    most of the sampling mass. The boolean-gate version would treat both
+    halves identically (uniform mass). Same direction as the optimal-colour
+    solver's `color_weight` extension, applied to placement instead of fit."""
+    h, w = 8, 8
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    target = np.full((h, w, 3), 100, dtype=np.uint8)
+    edge = np.ones((h, w), dtype=np.float32)
+    edge[:, w // 2:] = 6.0
+    cdf, gy, gx = build_center_cdf(canvas, target, edge, grid_n=4)
+    probs = np.diff(np.concatenate([[0.0], cdf])).reshape(gy, gx)
+    left = float(probs[:, : gx // 2].sum())
+    right = float(probs[:, gx // 2 :].sum())
+    assert right > left * 10, f"high-edge half expected ≫ low-edge half, got {right=:.4f} {left=:.4f}"
