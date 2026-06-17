@@ -1,5 +1,5 @@
 // TopBar: top control row (render params + canvas size + backend/assist) and the engine progress bar.
-import { InputNumber, Select, Button, Progress, ColorPicker, Tooltip, Slider } from "@douyinfe/semi-ui";
+import { InputNumber, Select, Progress, ColorPicker, Tooltip, Slider } from "@douyinfe/semi-ui";
 import { IconHelpCircle } from "@douyinfe/semi-icons";
 import type { TopBarProps } from "../types";
 
@@ -22,12 +22,6 @@ export default function TopBar(props: TopBarProps) {
     assistMode,
     setAssistMode,
     progress,
-    running,
-    canStart,
-    onStart,
-    onStop,
-    onImportJson,
-    onResetPreview,
   } = props;
 
   const pct = progress.total > 0 ? Math.min(100, (progress.n / progress.total) * 100) : 0;
@@ -46,23 +40,6 @@ export default function TopBar(props: TopBarProps) {
             max={3000}
             step={50}
             style={{ width: 84 }}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">
-            渲染质量
-            <Tooltip content="更高质量=更大搜索预算+更精细的采样/透明度/重拟合，渲染更慢">
-              <IconHelpCircle size="small" className="field-help" />
-            </Tooltip>
-          </span>
-          <Slider
-            value={quality}
-            onChange={(v) => setQuality(Number(v))}
-            min={1}
-            max={4}
-            step={1}
-            marks={{ 1: "草稿", 2: "标准", 3: "精细", 4: "极致" }}
-            style={{ width: 160 }}
           />
         </label>
         <label className="field">
@@ -149,28 +126,27 @@ export default function TopBar(props: TopBarProps) {
             ]}
           />
         </label>
-        <span className="spacer" />
-        <div className="btn-group">
-          <Button theme="light" type="tertiary" onClick={onImportJson} disabled={running}>
-            导入 JSON
-          </Button>
-          <Button theme="light" type="tertiary" onClick={onResetPreview} disabled={running}>
-            重置
-          </Button>
-          {running ? (
-            <Button theme="solid" type="danger" onClick={onStop}>
-              终止渲染
-            </Button>
-          ) : (
-            <Button theme="solid" type="primary" onClick={onStart} disabled={!canStart}>
-              开始渲染
-            </Button>
-          )}
-        </div>
+        <label className="field">
+          <span className="field-label">
+            渲染质量
+            <Tooltip content="更高质量=更大搜索预算+更精细的采样/透明度/重拟合，渲染更慢">
+              <IconHelpCircle size="small" className="field-help" />
+            </Tooltip>
+          </span>
+          <Slider
+            value={quality}
+            onChange={(v) => setQuality(Number(v))}
+            min={1}
+            max={4}
+            step={1}
+            marks={{ 1: "草稿", 2: "标准", 3: "精细", 4: "极致" }}
+            style={{ width: 160 }}
+          />
+        </label>
       </div>
       <div className="progress-wrap">
-        <Progress percent={pct} stroke="var(--accent)" showInfo={false} aria-label="渲染进度" />
         <div className="progress-label">{label}</div>
+        <Progress percent={pct} stroke="var(--accent)" showInfo={false} aria-label="渲染进度" />
       </div>
     </>
   );
