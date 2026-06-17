@@ -1,5 +1,5 @@
 // TopBar: top control row (render params + canvas size + backend/assist) and the engine progress bar.
-import { InputNumber, Select, Button, Progress, ColorPicker, Tooltip } from "@douyinfe/semi-ui";
+import { InputNumber, Select, Button, Progress, ColorPicker, Tooltip, Slider } from "@douyinfe/semi-ui";
 import { IconHelpCircle } from "@douyinfe/semi-icons";
 import type { TopBarProps } from "../types";
 
@@ -7,6 +7,8 @@ export default function TopBar(props: TopBarProps) {
   const {
     stopAt,
     setStopAt,
+    quality,
+    setQuality,
     canvasWidth,
     setCanvasWidth,
     canvasHeight,
@@ -44,6 +46,23 @@ export default function TopBar(props: TopBarProps) {
             max={3000}
             step={50}
             style={{ width: 84 }}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">
+            渲染质量
+            <Tooltip content="更高质量=更大搜索预算+更精细的采样/透明度/重拟合，渲染更慢">
+              <IconHelpCircle size="small" className="field-help" />
+            </Tooltip>
+          </span>
+          <Slider
+            value={quality}
+            onChange={(v) => setQuality(Number(v))}
+            min={1}
+            max={4}
+            step={1}
+            marks={{ 1: "草稿", 2: "标准", 3: "精细", 4: "极致" }}
+            style={{ width: 160 }}
           />
         </label>
         <label className="field">

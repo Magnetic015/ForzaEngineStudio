@@ -54,6 +54,23 @@ def _synthetic_image(w: int = 80, h: int = 80) -> np.ndarray:
     return img
 
 
+def _high_freq_image(w: int = 80, h: int = 80) -> np.ndarray:
+    """The gradient base plus heavy high-frequency texture (per-pixel noise + a
+    fine checker). simplify_for_render's purpose is to cut high-frequency
+    content, so its benefit is only demonstrable where such content exists.
+
+    A purely SMOOTH target is no longer a valid fixture for that: per-shape alpha
+    now reconstructs a smooth gradient better than its posterized (banded) form,
+    so flattening a smooth image adds band edges and hurts. simplify still wins
+    clearly on textured content — its actual use (real photos)."""
+    rng = np.random.RandomState(3)
+    base = _synthetic_image(w, h).astype(np.int32)
+    base += rng.randint(-55, 55, (h, w, 3))
+    yy, xx = np.indices((h, w))
+    base += (((xx // 2 + yy // 2) % 2) * 40 - 20)[:, :, None]
+    return base.clip(0, 255).astype(np.uint8)
+
+
 def _fixed_profile(stop_at: int) -> Profile:
     # max_threads=1 forces a single worker → deterministic across machines.
     return Profile(
@@ -143,14 +160,20 @@ def test_assist_reaches_quality_with_fewer_shapes():
 
 
 def test_simplify_is_easier_to_reproduce():
-    """Render-optimization: a flattened target is reconstructed to a lower RMS
-    than the original photo at the same layer budget.
+    """Render-optimization: flattening a HIGH-FREQUENCY target into clean
+    flat-colour regions makes it cheaper to paint than the noisy original at the
+    same layer budget.
 
     Each run's RMS is measured against its OWN target, so a lower number means
     the simplified image is genuinely cheaper to paint — the same fidelity is
     reachable in fewer layers (each shape is one Forza layer).
+
+    Uses a textured fixture deliberately (see _high_freq_image): the engine's
+    per-shape alpha now reconstructs smooth gradients better than a posterized
+    version of them, so simplify only helps where there is high-frequency
+    content to remove — which is exactly its real-world target (photos).
     """
-    img = _synthetic_image()
+    img = _high_freq_image()
     simp = A.simplify_for_render(img, levels=8)
     _, _, rms_orig = _run(img, 40)     # reconstruct original, rms vs original
     _, _, rms_simp = _run(simp, 40)    # reconstruct simplified, rms vs simplified

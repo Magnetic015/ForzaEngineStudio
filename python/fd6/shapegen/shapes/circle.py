@@ -30,15 +30,15 @@ class Circle(Shape):
         mask = (xs[None, :] ** 2 + ys[:, None] ** 2) <= r2
         return (mask.astype(np.uint8) * 255), bbox
 
-    def mutate(self, rng: random.Random, w: int, h: int) -> "Circle":
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "Circle":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
         which = rng.randint(0, 1)
         if which == 0:
-            new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
-            new.y = _clamp(new.y + rng.gauss(0, 16), 0, h - 1)
+            new.x = _clamp(new.x + rng.gauss(0, 16 * scale), 0, w - 1)
+            new.y = _clamp(new.y + rng.gauss(0, 16 * scale), 0, h - 1)
         else:
-            new.r = _clamp(new.r + rng.gauss(0, 16), 1, max(w, h))
+            new.r = _clamp(new.r + rng.gauss(0, 16 * scale), 1, max(w, h))
         return new
 
     def to_json(self) -> dict:

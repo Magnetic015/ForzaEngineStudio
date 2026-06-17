@@ -33,6 +33,9 @@ __pycache__/
 *_engine.json
 *_ai.png
 
+# Local dev workspace (eval harnesses, scratch notes) — never pushed
+docs/
+
 # Secrets & credentials — never commit API keys, tokens, certs, or private keys
 .env
 .env.*
