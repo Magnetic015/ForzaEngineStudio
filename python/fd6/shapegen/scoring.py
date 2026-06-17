@@ -106,11 +106,14 @@ def compute_optimal_color(
     mask_local: np.ndarray,
     bbox: tuple[int, int, int, int],
     alpha: int,
+    color_weight: np.ndarray | None = None,
 ) -> tuple[int, int, int, int]:
     """For a given shape mask and fixed alpha, compute the RGB color that minimizes RMS over the masked region.
 
     Closed-form: with `over` compositing `out = a*src + (1-a)*dst`, RMS is minimized when
     src = (target - (1-a)*dst) / a, averaged over the masked pixels.
+    `color_weight` optionally biases that average toward pixels that matter
+    more to the active score, e.g. edge/saliency/detail regions.
     """
     x0, y0, x1, y1 = bbox
     if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
@@ -118,7 +121,9 @@ def compute_optimal_color(
     tgt = target[y0:y1, x0:x1].astype(np.float32)
     cur = current[y0:y1, x0:x1].astype(np.float32)
     m = mask_local.astype(np.float32) / 255.0
-    weight = m.sum()
+    if color_weight is not None:
+        m = m * np.maximum(color_weight.astype(np.float32), 0.0)
+    weight = float(m.sum())
     if weight < 0.5:
         return (0, 0, 0, alpha)
     a = alpha / 255.0
@@ -156,7 +161,8 @@ def composite(
         effective_mask = np.minimum(mask_local, region_alpha)
     else:
         effective_mask = mask_local
-    color = compute_optimal_color(target, current, effective_mask, bbox, shape.color[3])
+    color_weight = edge_weight[y0:y1, x0:x1] if edge_weight is not None else None
+    color = compute_optimal_color(target, current, effective_mask, bbox, shape.color[3], color_weight)
     new = current.copy()
     a = color[3] / 255.0
     region_cur = new[y0:y1, x0:x1].astype(np.float32)
@@ -238,7 +244,8 @@ def composite_optimal(
     best_color = shape.color
     best_blended = None
     for a8 in alpha_levels:
-        color = compute_optimal_color(target, current, color_mask, bbox, a8)
+        color_weight = edge_weight[y0:y1, x0:x1] if edge_weight is not None else None
+        color = compute_optimal_color(target, current, color_mask, bbox, a8, color_weight)
         a = color[3] / 255.0
         src = np.array(color[:3], dtype=np.float32)
         blended = m * (a * src + (1.0 - a) * region_cur) + (1.0 - m) * region_cur
@@ -374,12 +381,13 @@ def score_shape(
         # AND-mask for color so the zeroed-out RGB of transparent pixels in
         # `target` can't drag the optimal color toward black.
         effective_mask = np.minimum(mask_local, region_alpha)
-    color = compute_optimal_color(target, current, effective_mask, bbox, shape.color[3])
+    color_weight = edge_weight[y0:y1, x0:x1] if edge_weight is not None else None
+    color = compute_optimal_color(target, current, effective_mask, bbox, shape.color[3], color_weight)
     a = color[3] / 255.0
     region_cur = current[y0:y1, x0:x1].astype(np.float32)
     region_tgt = target[y0:y1, x0:x1].astype(np.float32)
     src = np.array(color[:3], dtype=np.float32)
-    m = (mask_local.astype(np.float32) / 255.0)[:, :, None]
+    m = (effective_mask.astype(np.float32) / 255.0)[:, :, None]
     blended = m * (a * src + (1.0 - a) * region_cur) + (1.0 - m) * region_cur
     diff_in = blended - region_tgt
     # Edge-weighted path supersedes the boolean alpha gate when present.
