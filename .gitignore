@@ -29,6 +29,12 @@ python/.venv
 __pycache__/
 *.pyc
 
+# Frozen sidecar (PyInstaller) — built by build-release.ps1, shipped as a Tauri
+# resource. Commit only the .gitkeep so the resource path exists for cargo build.
+/src-tauri/pyengine/fes-engine/*
+!/src-tauri/pyengine/fes-engine/.gitkeep
+/build/
+
 # Engine output (generated next to the source image)
 *_engine.json
 *_ai.png
