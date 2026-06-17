@@ -43,21 +43,24 @@ from fd6.io import FD6Document, save_json  # noqa: E402
 
 
 # Render-quality presets (--quality 1..4). Each bundles the search budget with
-# the four fidelity knobs (guided sampling ratio, per-shape alpha sweep,
-# coverage-aware polish). Level 2 = the shipped default, so existing runs are
-# unchanged; 1 is a fast draft, 3/4 trade time for fidelity.
+# the fidelity knobs (guided sampling ratio, coverage-aware polish). `alpha_levels`
+# is pinned to (255,): the livery injector draws every shape SOLID (alpha forced
+# 255, no under-paint), so the engine commits + searches OPAQUE (Profile.opaque)
+# and the preview is WYSIWYG. Level 2 = the shipped default budget; 1 is a fast
+# draft, 3/4 spend more layers on detail — the way to smoother output now that
+# translucency can't carry gradients in-game.
 QUALITY_PRESETS: dict[int, dict] = {
     1: {"random_samples": 500,  "mutated_samples": 120, "guided_fraction": 0.55,
-        "alpha_levels": (90, 140, 190, 255),
+        "alpha_levels": (255,),
         "refit_final": False, "refit_min_visible": 0.6},
     2: {"random_samples": 1000, "mutated_samples": 200, "guided_fraction": 0.70,
-        "alpha_levels": (60, 90, 120, 150, 180, 210, 235, 255),
+        "alpha_levels": (255,),
         "refit_final": True,  "refit_min_visible": 0.6},
     3: {"random_samples": 1600, "mutated_samples": 320, "guided_fraction": 0.80,
-        "alpha_levels": (60, 90, 120, 150, 180, 210, 235, 255),
+        "alpha_levels": (255,),
         "refit_final": True,  "refit_min_visible": 0.5},
     4: {"random_samples": 2600, "mutated_samples": 480, "guided_fraction": 0.85,
-        "alpha_levels": (50, 75, 100, 125, 150, 175, 200, 225, 240, 255),
+        "alpha_levels": (255,),
         "refit_final": True,  "refit_min_visible": 0.5},
 }
 
@@ -172,8 +175,10 @@ def main() -> int:
                     help="enable model-assist (render-optimize + hybrid base + saliency guidance)")
     ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=True,
                     help="flatten the target into clean flat-color regions before rendering")
-    ap.add_argument("--assist-base", action=argparse.BooleanOptionalAction, default=True,
-                    help="seed the canvas with a low-frequency under-paint (hybrid render)")
+    ap.add_argument("--assist-base", action=argparse.BooleanOptionalAction, default=False,
+                    help="seed the canvas with a low-frequency under-paint (hybrid render). OFF by "
+                         "default: the injector draws shapes only, so an under-paint is invisible "
+                         "in-game and would make the preview lie. Use --base-image to force it.")
     ap.add_argument("--assist-importance", action=argparse.BooleanOptionalAction, default=True,
                     help="bias shape placement with a saliency/structure importance map")
     ap.add_argument("--assist-levels", type=int, default=12,
@@ -283,6 +288,7 @@ def main() -> int:
         alpha_levels=preset["alpha_levels"],
         refit_final=refit_final,
         refit_min_visible=preset["refit_min_visible"],
+        opaque=True,  # game-faithful: the injector draws solid layers, so search + commit + preview are all opaque
     )
 
     try:

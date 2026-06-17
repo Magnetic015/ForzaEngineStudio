@@ -172,7 +172,7 @@ def _worker_independent_search(args: tuple) -> tuple:
     Result is mathematically identical; just no longer recomputed N times.
     """
     try:
-        (types, n_random, n_mutate, w, h, seed, max_size_frac, center_cdf, guided_fraction) = args
+        (types, n_random, n_mutate, w, h, seed, max_size_frac, center_cdf, guided_fraction, opaque) = args
         canvas = _W_CANVAS
         target = _W_TARGET
         alpha = _W_ALPHA
@@ -197,6 +197,12 @@ def _worker_independent_search(args: tuple) -> tuple:
         best_shape = None
         for i in range(n_rand):
             s = random_shape(rng, w, h, types, max_size_frac=max_size_frac)
+            if opaque:
+                # Rank candidates at SOLID alpha so selection matches what the
+                # injector draws. mutate() preserves color and commit re-enforces
+                # 255 via _commit_alpha_levels, so the saved shape stays opaque.
+                c = s.color
+                s.color = (int(c[0]), int(c[1]), int(c[2]), 255)
             if cxa is not None and hasattr(s, "x") and hasattr(s, "y"):
                 s.x = float(cxa[i]); s.y = float(cya[i])
             score, color = score_shape(s, canvas, target, alpha,
@@ -282,6 +288,11 @@ class Engine:
         self.config = config
         self.profile = config.profile
         self.h, self.w = self.target.shape[:2]
+        self._opaque = bool(getattr(self.profile, "opaque", False))
+        # Alpha levels swept at commit. Opaque (game-faithful) mode forces solid
+        # 255 so the committed/saved colours are exactly what the injector draws;
+        # otherwise the profile's translucent ladder.
+        self._commit_alpha_levels = (255,) if self._opaque else self.profile.alpha_levels
         self.alpha_mask = alpha_mask if alpha_mask is not None else None
         self._preview_background = (
             tuple(int(c) for c in preview_background) if preview_background is not None else None
@@ -392,7 +403,10 @@ class Engine:
         requested = _gpu.resolve_backend(getattr(self.profile, "compute_backend", "auto"))
         if requested == "gpu" and ellipse_only:
             try:
-                self._gpu = _gpu.OpenCLEllipseSearcher(self.target, self.alpha_mask, self.edge_weight)
+                self._gpu = _gpu.OpenCLEllipseSearcher(
+                    self.target, self.alpha_mask, self.edge_weight,
+                    **({"search_alpha": 1.0} if self._opaque else {}),
+                )
                 self._backend = "gpu"
             except Exception:
                 self._gpu = None
@@ -435,11 +449,22 @@ class Engine:
         return self.canvas.copy()
 
     def seed_shapes(self, shapes: list[Shape]) -> None:
-        """Resume mode: replay shapes onto the canvas before generation starts."""
+        """Resume mode: replay shapes onto the canvas before generation starts.
+
+        Opaque mode forces resumed shapes solid (alpha 255) and paints them as flat
+        layers, so a resumed run stays game-faithful exactly like a fresh one — the
+        injector draws them solid regardless of any saved per-shape alpha.
+        """
         for s in shapes:
-            new_canvas, new_rms = composite(self.canvas, s, self.target, self.alpha_mask, self.edge_weight)
-            self.canvas[:] = new_canvas  # write into shared memory
-            self.rms = new_rms
+            if self._opaque:
+                c = s.color
+                s = s.with_color((int(c[0]), int(c[1]), int(c[2]), 255))
+                self.canvas[:] = composite_fixed(self.canvas, s, self.alpha_mask)
+                self.rms = rms_error(self.canvas, self.target, self.alpha_mask, self.edge_weight)
+            else:
+                new_canvas, new_rms = composite(self.canvas, s, self.target, self.alpha_mask, self.edge_weight)
+                self.canvas[:] = new_canvas  # write into shared memory
+                self.rms = new_rms
             self.shapes.append(s)
 
     # Residual reblend disabled in v0.4.0 — the size-schedule + edge-weight
@@ -519,7 +544,7 @@ class Engine:
                 visible = np.where(owner[y0:y1, x0:x1] == i, mask_local, np.uint8(0))
                 canvas, _ = composite_optimal(
                     canvas, s, self.target, self.alpha_mask, self.edge_weight,
-                    alpha_levels=self.profile.alpha_levels,
+                    alpha_levels=self._commit_alpha_levels,
                     fit_mask_local=visible,
                 )
             else:
@@ -567,7 +592,7 @@ class Engine:
         args_list = [
             (types, n_random, n_mutate, self.w, self.h,
              self.rng.randint(0, 2**31 - 1), max_size_frac, center_cdf,
-             self.profile.guided_fraction)
+             self.profile.guided_fraction, self._opaque)
             for _ in range(self._n_workers)
         ]
         best_score = float("inf")
@@ -715,7 +740,7 @@ class Engine:
                 # workers see the new state on their next read. composite_optimal
                 # also picks the per-shape alpha that fits the region best.
                 new_canvas, new_rms = composite_optimal(self.canvas, refined, self.target, self.alpha_mask, self.edge_weight,
-                                                        alpha_levels=self.profile.alpha_levels)
+                                                        alpha_levels=self._commit_alpha_levels)
                 self.canvas[:] = new_canvas
                 self.rms = new_rms
                 self.shapes.append(refined)
