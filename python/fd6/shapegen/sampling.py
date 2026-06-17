@@ -61,9 +61,12 @@ def build_center_cdf(
     total = float(cell.sum())
     if total <= 1e-9:
         # Canvas already matches everywhere (or fully masked) — sample uniformly
-        # over whichever cells are inside the scored region.
+        # over whichever cells are inside the scored region. Gate on positive
+        # weight explicitly: `valid` now carries the edge MAGNITUDE, so a future
+        # importance map with a tiny non-zero floor outside the alpha region must
+        # not leak those cells back into the uniform pool.
         if valid is not None:
-            cell = (_block_sum(valid, gy, gx) > 0).astype(np.float64)
+            cell = (_block_sum((valid > 0).astype(np.float32), gy, gx) > 0).astype(np.float64)
         if cell.sum() <= 0:
             cell = np.ones((gy, gx), dtype=np.float64)
     else:
