@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Toast } from "@douyinfe/semi-ui";
+import { Button, Toast } from "@douyinfe/semi-ui";
 import {
   isTauri,
   readImageDataUrl,
@@ -7,6 +7,8 @@ import {
   startGeneration,
   stopGeneration,
   importJson,
+  saveCroppedImage,
+  revealInDir,
   pickImageFile,
   pickJsonFile,
   type Cand,
@@ -19,6 +21,8 @@ import TopBar from "./components/TopBar";
 import CandidateStrip from "./components/CandidateStrip";
 import AIComposer from "./components/AIComposer";
 import PreviewPane from "./components/PreviewPane";
+import CropModal from "./components/CropModal";
+import SystemNotice from "./components/SystemNotice";
 
 const READY_STATUS = isTauri
   ? "就绪。请选择一张本地图片。"
@@ -66,12 +70,19 @@ export default function App() {
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
-  const [lastPrompt, setLastPrompt] = useState(""); // last submitted prompt, echoed by the composer
 
   // render / status surfaces
   const [status, setStatus] = useState(READY_STATUS);
   const [progress, setProgress] = useState<ProgressState>({ n: 0, total: 0, rms: 0 });
   const [previewSrc, setPreviewSrc] = useState("");
+
+  // crop modal
+  const [cropOpen, setCropOpen] = useState(false);
+  const [cropSaving, setCropSaving] = useState(false);
+
+  // Path of the shape JSON written by the most recent completed render (""
+  // until one finishes). Drives the "打开保存目录" button in the preview toolbar.
+  const [savedJsonPath, setSavedJsonPath] = useState("");
 
   const { leftPct, dragging, bodyRef, onMouseDown } = useSplitter(50);
 
@@ -80,6 +91,8 @@ export default function App() {
   const hasTarget = selectedIndex >= 0;
   const canStart = hasTarget && !running;
   const sendBlocked = aiRunning || running || !hasTarget || !apiKey.trim() || !currentModel;
+  const targetSrc = selectedCand?.src || "";
+  const canCrop = hasTarget && !running && !aiRunning && !!targetSrc;
 
   // ── candidate helpers ───────────────────────────────────────────────────────
   // Label for a freshly picked local image: 原图 / 原图 2 / 原图 3 …
@@ -142,8 +155,7 @@ export default function App() {
       return;
     }
     const srcLabel = selectedCand?.label || "目标图";
-    // Echo the submitted prompt; AIChatInput clears its own input via `generating`.
-    setLastPrompt(t);
+    // AIChatInput clears its own input via `generating`; progress shows in the SystemNotice.
     setAiRunning(true);
     setStatus(`AI 处理中…（输入：${srcLabel}，可能需要十几秒）`);
     try {
@@ -184,6 +196,7 @@ export default function App() {
     genCounterRef.current = gen;
     currentGenRef.current = gen;
     setRunning(true);
+    setSavedJsonPath(""); // previous run's save dir no longer applies
     setStatus(
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
     );
@@ -239,6 +252,7 @@ export default function App() {
     }
     const file = await pickJsonFile();
     if (!file) return;
+    setSavedJsonPath(""); // an imported preview isn't this app's latest generated save
     setStatus("正在渲染 JSON…");
     try {
       const dataUrl = await importJson(file);
@@ -255,7 +269,48 @@ export default function App() {
     if (running) return;
     setPreviewSrc("");
     setProgress({ n: 0, total: 0, rms: 0 });
+    setSavedJsonPath("");
     setStatus(READY_STATUS);
+  }
+
+  // Open the folder holding the most recent render's shape JSON.
+  async function openSaveDir() {
+    if (!savedJsonPath) return;
+    try {
+      await revealInDir(savedJsonPath);
+    } catch (e) {
+      Toast.error({ content: "打开保存目录失败：" + e, duration: 5 });
+    }
+  }
+
+  // Label for a cropped candidate: 裁剪 / 裁剪 2 / 裁剪 3 … (mirrors nextLocalLabel).
+  const nextCropLabel = () => {
+    const n = candidatesRef.current.filter((c) => c.label.startsWith("裁剪")).length;
+    return n === 0 ? "裁剪" : `裁剪 ${n + 1}`;
+  };
+
+  // Persist the cropped PNG (Tauri) or keep the data URL (browser preview), then
+  // add it to the candidate list as a new target image.
+  async function handleSaveCrop(dataUrl: string) {
+    const label = nextCropLabel();
+    if (!isTauri) {
+      addCandidate({ path: null, src: dataUrl, label });
+      setStatus(`纯前端预览模式：已裁剪并加入候选「${label}」（渲染需在桌面应用内运行）。`);
+      setCropOpen(false);
+      return;
+    }
+    setCropSaving(true);
+    try {
+      // The cropped source's path seeds the saved filename (<original>_<ts>.png).
+      const path = await saveCroppedImage(dataUrl, currentRenderPath || "");
+      addCandidate({ path, src: dataUrl, label });
+      setStatus(`已裁剪并加入候选「${label}」，已选为目标图。`);
+      setCropOpen(false);
+    } catch (e) {
+      Toast.error({ content: "保存裁剪失败：" + e, duration: 5 });
+    } finally {
+      setCropSaving(false);
+    }
   }
 
   // ── engine event stream ───────────────────────────────────────────────────────
@@ -283,6 +338,8 @@ export default function App() {
       case "done":
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total ?? p.shape_count, rms: p.rms });
+        // Only a real saved path (not a "(save failed: …)" marker) enables 打开保存目录.
+        if (p.json_path && !p.json_path.startsWith("(")) setSavedJsonPath(p.json_path);
         setStatus(
           `完成！共 ${p.shape_count} 个形状，最终 RMS ${typeof p.rms === "number" ? p.rms.toFixed(2) : p.rms} · JSON 已保存：${p.json_path}`
         );
@@ -303,8 +360,6 @@ export default function App() {
         break;
     }
   });
-
-  const targetSrc = selectedCand?.src || "";
 
   return (
     <main className="app">
@@ -327,17 +382,22 @@ export default function App() {
           assistMode={assistMode}
           setAssistMode={setAssistMode}
           progress={progress}
-          running={running}
-          canStart={canStart}
-          onStart={start}
-          onStop={stop}
-          onImportJson={handleImportJson}
-          onResetPreview={resetPreview}
         />
       </header>
 
       <div className="body" ref={bodyRef}>
         <section className="left" style={{ flex: `0 0 ${leftPct}%` }}>
+          <div className="left-toolbar">
+            <Button
+              theme="light"
+              type="tertiary"
+              disabled={!canCrop}
+              onClick={() => setCropOpen(true)}
+              title={canCrop ? "裁剪目标图并加入候选" : "先选择一张目标图"}
+            >
+              裁剪
+            </Button>
+          </div>
           <div className="images">
             <CandidateStrip
               candidates={candidates}
@@ -354,11 +414,11 @@ export default function App() {
           </div>
 
           <div className="ai-block">
+            <SystemNotice status={status} />
             <AIComposer
               onSend={aiProcess}
               aiRunning={aiRunning}
               sendBlocked={sendBlocked}
-              lastPrompt={lastPrompt}
               apiKey={apiKey}
               setApiKey={setApiKey}
               model={currentModel}
@@ -392,9 +452,27 @@ export default function App() {
         </div>
 
         <section className="right">
-          <PreviewPane previewSrc={previewSrc} status={status} />
+          <PreviewPane
+            previewSrc={previewSrc}
+            running={running}
+            canStart={canStart}
+            savedJsonPath={savedJsonPath}
+            onOpenSaveDir={openSaveDir}
+            onStart={start}
+            onStop={stop}
+            onImportJson={handleImportJson}
+            onResetPreview={resetPreview}
+          />
         </section>
       </div>
+
+      <CropModal
+        visible={cropOpen}
+        src={targetSrc}
+        saving={cropSaving}
+        onCancel={() => setCropOpen(false)}
+        onSave={handleSaveCrop}
+      />
     </main>
   );
 }

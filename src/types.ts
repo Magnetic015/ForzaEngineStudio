@@ -33,12 +33,6 @@ export interface TopBarProps {
   assistMode: string; // "off" | "on"
   setAssistMode: (v: string) => void;
   progress: ProgressState;
-  running: boolean;
-  canStart: boolean; // a target image is selected and not running
-  onStart: () => void;
-  onStop: () => void; // terminate the in-flight render
-  onImportJson: () => void;
-  onResetPreview: () => void;
 }
 
 export interface CandidateStripProps {
@@ -53,7 +47,6 @@ export interface AIComposerProps {
   onSend: (text: string) => void;
   aiRunning: boolean; // drives AIChatInput `generating` (clears input + shows stop)
   sendBlocked: boolean; // no key / no target / busy → can't send
-  lastPrompt: string; // most recent submitted prompt, echoed above the input
   // model + key are configured inside the AIChatInput configure area:
   apiKey: string;
   setApiKey: (v: string) => void;
@@ -61,7 +54,28 @@ export interface AIComposerProps {
   onSelectModel: (m: string) => void;
 }
 
+// 系统提示组件：展示引擎 / AI 的状态通知文本。
+export interface SystemNoticeProps {
+  status: string;
+}
+
+export interface CropModalProps {
+  visible: boolean;
+  src: string; // data/object URL of the target image to crop ("" → nothing to crop)
+  saving: boolean; // persisting the crop → show the OK button's loading state
+  onCancel: () => void;
+  onSave: (dataUrl: string) => void; // cropped PNG as a data URL
+}
+
 export interface PreviewPaneProps {
   previewSrc: string; // "" → show placeholder
-  status: string;
+  // action buttons live in the preview pane's top-right corner
+  running: boolean;
+  canStart: boolean; // a target image is selected and not running
+  savedJsonPath: string; // last render's shape JSON path ("" → hide 打开保存目录)
+  onOpenSaveDir: () => void; // open the folder containing savedJsonPath
+  onStart: () => void;
+  onStop: () => void; // terminate the in-flight render
+  onImportJson: () => void;
+  onResetPreview: () => void;
 }

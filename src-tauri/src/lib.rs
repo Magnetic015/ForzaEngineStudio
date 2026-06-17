@@ -32,6 +32,41 @@ fn venv_python(py_dir: &Path) -> PathBuf {
     }
 }
 
+/// App-data output dirs for app-generated assets: `<app_data>/images` and
+/// `<app_data>/data`, created on demand. Centralizes where AI / crop images and
+/// engine JSON land instead of scattering them next to each source image.
+fn output_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    let images = base.join("images");
+    let data = base.join("data");
+    std::fs::create_dir_all(&images).map_err(|e| format!("cannot create images dir: {e}"))?;
+    std::fs::create_dir_all(&data).map_err(|e| format!("cannot create data dir: {e}"))?;
+    Ok((images, data))
+}
+
+/// Milliseconds since the Unix epoch — the timestamp suffix for generated files.
+fn timestamp_millis() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Build `<source-stem>_<timestamp>.<ext>` — the rename scheme for app-generated
+/// images / JSON derived from a source file.
+fn timestamped_name(source: &str, ext: &str) -> String {
+    let stem = Path::new(source)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("image");
+    format!("{stem}_{}.{ext}", timestamp_millis())
+}
+
 /// Start a generation run: spawn the Python engine sidecar and stream its
 /// line-JSON events to the frontend as `engine-event`. Returns immediately;
 /// progress/preview/done arrive asynchronously via events.
@@ -58,6 +93,10 @@ fn start_generation(
     let venv = venv_python(&py_dir);
     let python = if venv.exists() { venv } else { PathBuf::from("python") };
 
+    // Generated shape JSON goes to the app-data data dir, named <source>_<ts>.json.
+    let (_, data_dir) = output_dirs(&app)?;
+    let out_json = data_dir.join(timestamped_name(&image, "json"));
+
     let mut cmd = Command::new(&python);
     cmd.arg(&script)
         .arg("--image").arg(&image)
@@ -67,6 +106,7 @@ fn start_generation(
         .arg("--bg-color").arg(&bg_color)
         .arg("--backend").arg(&backend)
         .arg("--quality").arg(quality.to_string())
+        .arg("--out").arg(&out_json)
         .current_dir(&py_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -209,11 +249,15 @@ fn kill_pid(pid: u32) -> Result<(), String> {
 /// UI — instead of stalling on the main thread while the model runs.
 #[tauri::command]
 async fn ai_process_image(
+    app: AppHandle,
     image: String,
     api_key: String,
     model: String,
     prompt: String,
 ) -> Result<String, String> {
+    // Edited image goes to the app-data images dir, named <source>_<ts>.png.
+    let (images_dir, _) = output_dirs(&app)?;
+    let out_png = images_dir.join(timestamped_name(&image, "png"));
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let py_dir = project_python_dir();
         let script = py_dir.join("image_process.py");
@@ -229,6 +273,7 @@ async fn ai_process_image(
             .arg("--api-key").arg(&api_key)
             .arg("--model").arg(&model)
             .arg("--prompt").arg(&prompt)
+            .arg("--out").arg(&out_png)
             .current_dir(&py_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -368,13 +413,65 @@ async fn import_json(json_path: String) -> Result<String, String> {
     .map_err(|e| format!("import task failed: {e}"))?
 }
 
+/// Persist a cropped image (a `data:` URL or raw base64 PNG produced in the
+/// webview by Semi's Cropper) to the app-data images dir as `<original>_<ts>.png`
+/// and return its path, so the result can join the candidate list and be fed to
+/// the renderer like any other image. `original` is the cropped source's path
+/// (its file stem seeds the name); empty falls back to "image".
+#[tauri::command]
+async fn save_cropped_image(app: AppHandle, data_url: String, original: String) -> Result<String, String> {
+    let (images_dir, _) = output_dirs(&app)?;
+    let out_path = images_dir.join(timestamped_name(&original, "png"));
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        // Accept "data:image/png;base64,XXXX" or a bare base64 payload.
+        let b64 = data_url.split_once(',').map(|(_, rest)| rest).unwrap_or(&data_url);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| format!("base64 decode failed: {e}"))?;
+        std::fs::write(&out_path, &bytes).map_err(|e| format!("write failed: {e}"))?;
+        Ok(out_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("save task failed: {e}"))?
+}
+
+/// Open the directory containing `path` in the OS file manager (Windows Explorer).
+/// Used by the "打开保存目录" button after a render writes its shape JSON.
+#[tauri::command]
+fn reveal_in_dir(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    let dir = if p.is_dir() {
+        p.to_path_buf()
+    } else {
+        p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // Spawn (don't wait): explorer.exe returns exit code 1 even on success,
+        // so checking its status would spuriously report failure.
+        Command::new("explorer")
+            .arg(&dir)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("failed to open explorer: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        Err("reveal is only supported on Windows".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(EngineState::default())
-        .invoke_handler(tauri::generate_handler![start_generation, stop_generation, ai_process_image, read_image_data_url, import_json])
+        .invoke_handler(tauri::generate_handler![start_generation, stop_generation, ai_process_image, read_image_data_url, import_json, save_cropped_image, reveal_in_dir])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
