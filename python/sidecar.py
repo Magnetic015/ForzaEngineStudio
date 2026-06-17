@@ -172,9 +172,17 @@ def main() -> int:
     # assists; each can be toggled off with its --no-* form. External image-model
     # assets (a flattened under-paint / a saliency map) override the local ones.
     ap.add_argument("--assist", action="store_true",
-                    help="enable model-assist (render-optimize + hybrid base + saliency guidance)")
-    ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=True,
-                    help="flatten the target into clean flat-color regions before rendering")
+                    help="enable model-assist. Defaults to saliency guidance only; render-optimize "
+                         "(--assist-simplify) and hybrid base (--assist-base) are explicit opt-ins "
+                         "because both reduce fidelity-to-original on detailed art (the injector draws "
+                         "opaque shapes only, and simplify pre-bands the target).")
+    ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=False,
+                    help="flatten the target into clean flat-color regions before rendering. OFF by "
+                         "default: bilateral+posterize discards the smooth gradients and fine detail "
+                         "of high-frequency art before the engine sees them, so the opaque render "
+                         "reproduces a banded/washed target (measured: it LOWERS fidelity-to-original "
+                         "at every quality level on a detailed portrait). Opt in for poster-style "
+                         "sources where flat regions genuinely cut the layer count.")
     ap.add_argument("--assist-base", action=argparse.BooleanOptionalAction, default=False,
                     help="seed the canvas with a low-frequency under-paint (hybrid render). OFF by "
                          "default: the injector draws shapes only, so an under-paint is invisible "
