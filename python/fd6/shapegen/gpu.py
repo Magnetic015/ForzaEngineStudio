@@ -242,23 +242,27 @@ def random_ellipse_params(w: int, h: int, b: int, max_size_frac: Optional[float]
 
 
 def mutate_ellipse_params(base: np.ndarray, w: int, h: int, b: int,
-                          rng: random.Random) -> np.ndarray:
-    """B jittered copies of `base` (mirrors RotatedEllipse.mutate distributions)."""
+                          rng: random.Random, scale: float = 1.0) -> np.ndarray:
+    """B jittered copies of `base` (mirrors RotatedEllipse.mutate distributions).
+
+    `scale` shrinks every step size, matching `RotatedEllipse.mutate(scale=...)`
+    so the GPU hill-climb can anneal from coarse to fine just like the CPU path.
+    """
     rs = np.random.RandomState(rng.randint(0, 2**31 - 1))
     out = np.tile(base.astype(np.float32), (b, 1))
     kind = rs.randint(0, 4, b)
     m0 = kind == 0
-    out[m0, 0] = np.clip(out[m0, 0] + rs.normal(0, 16, int(m0.sum())), 0, w - 1)
-    out[m0, 1] = np.clip(out[m0, 1] + rs.normal(0, 16, int(m0.sum())), 0, h - 1)
+    out[m0, 0] = np.clip(out[m0, 0] + rs.normal(0, 16 * scale, int(m0.sum())), 0, w - 1)
+    out[m0, 1] = np.clip(out[m0, 1] + rs.normal(0, 16 * scale, int(m0.sum())), 0, h - 1)
     m1 = kind == 1
-    out[m1, 2] = np.clip(out[m1, 2] + rs.normal(0, 16, int(m1.sum())), 1, w)
-    out[m1, 3] = np.clip(out[m1, 3] + rs.normal(0, 16, int(m1.sum())), 1, h)
+    out[m1, 2] = np.clip(out[m1, 2] + rs.normal(0, 16 * scale, int(m1.sum())), 1, w)
+    out[m1, 3] = np.clip(out[m1, 3] + rs.normal(0, 16 * scale, int(m1.sum())), 1, h)
     m2 = kind == 2
-    out[m2, 4] = np.mod(out[m2, 4] + rs.normal(0, 25, int(m2.sum())), 180.0)
+    out[m2, 4] = np.mod(out[m2, 4] + rs.normal(0, 25 * scale, int(m2.sum())), 180.0)
     m3 = kind == 3
-    out[m3, 0] = np.clip(out[m3, 0] + rs.normal(0, 8, int(m3.sum())), 0, w - 1)
-    out[m3, 1] = np.clip(out[m3, 1] + rs.normal(0, 8, int(m3.sum())), 0, h - 1)
-    out[m3, 4] = np.mod(out[m3, 4] + rs.normal(0, 15, int(m3.sum())), 180.0)
+    out[m3, 0] = np.clip(out[m3, 0] + rs.normal(0, 8 * scale, int(m3.sum())), 0, w - 1)
+    out[m3, 1] = np.clip(out[m3, 1] + rs.normal(0, 8 * scale, int(m3.sum())), 0, h - 1)
+    out[m3, 4] = np.mod(out[m3, 4] + rs.normal(0, 15 * scale, int(m3.sum())), 180.0)
     return out
 
 
@@ -416,13 +420,25 @@ class OpenCLEllipseSearcher:
         return out
 
     def search(self, canvas: np.ndarray, n_random: int, n_mutate: int,
-               max_size_frac: Optional[float], rng: random.Random) -> tuple[float, Optional[Shape]]:
+               max_size_frac: Optional[float], rng: random.Random,
+               center_cdf: Optional[tuple] = None,
+               guided_fraction: float = 0.7) -> tuple[float, Optional[Shape]]:
         cl = self.cl
         cur = np.ascontiguousarray(canvas, dtype=np.float32)
         cl.enqueue_copy(self.queue, self._buf_canvas, cur.ravel())
         full_sq = float((((cur - self._target_np) ** 2) * self._edge_np[:, :, None]).sum())
 
         params = random_ellipse_params(self.w, self.h, max(1, n_random), max_size_frac, rng)
+        # Residual-guided placement: bias a fraction of candidate centers toward
+        # the cells that still differ most from the target (see sampling.py).
+        if center_cdf is not None:
+            from fd6.shapegen.sampling import sample_centers
+            cdf, gy, gx = center_cdf
+            cxa, cya = sample_centers(cdf, gy, gx, self.w, self.h,
+                                      params.shape[0], rng.randint(0, 2**31 - 1),
+                                      p_guided=guided_fraction)
+            params[:, 0] = cxa
+            params[:, 1] = cya
         scores = self._score(params, full_sq, self._tile_for(params, self.w, self.h))
         bi = int(np.argmin(scores))
         best_score = float(scores[bi])
@@ -430,12 +446,17 @@ class OpenCLEllipseSearcher:
         if not math.isfinite(best_score):
             return float("inf"), None
 
+        # Annealed hill-climb: smaller batches → more refinement rounds, with the
+        # step size shrinking each round so late rounds fine-tune. Deeper + more
+        # patient than the old 3-round/early-stop-2 climb that left the GPU path
+        # under-refined versus the CPU path.
         cap = max(1, n_mutate)
-        batch = min(cap, 64)
+        batch = min(cap, 48)
         steps = max(1, cap // batch)
         no_improve = 0
-        for _ in range(steps):
-            muts = mutate_ellipse_params(best, self.w, self.h, batch, rng)
+        for step in range(steps):
+            scale = max(0.2, 1.0 - step / max(1, steps))
+            muts = mutate_ellipse_params(best, self.w, self.h, batch, rng, scale=scale)
             mscores = self._score(muts, full_sq, self._tile_for(muts, self.w, self.h))
             mbi = int(np.argmin(mscores))
             ms = float(mscores[mbi])
@@ -444,7 +465,7 @@ class OpenCLEllipseSearcher:
                 no_improve = 0
             else:
                 no_improve += 1
-                if no_improve >= max(2, steps // 4):
+                if no_improve >= max(3, steps // 2):
                     break
 
         cx, cy, rx, ry, ang = (float(v) for v in best)

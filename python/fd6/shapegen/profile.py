@@ -21,6 +21,18 @@ class Profile:
     save_every: int = 100
     stop_at: int = 3000
     shape_types: list[str] = field(default_factory=lambda: ["rotated_ellipse"])
+    # Coverage-aware colour polish after generation: re-solve each shape's
+    # (colour, alpha) over only the pixels where it stays visible in the final
+    # stack. Off by default (a no-op for the live stream until enabled).
+    refit_final: bool = False
+    # Coverage-aware polish only re-fits a shape whose visible (topmost) body is
+    # at least this fraction of its area (see Engine._refit_colors_coverage_aware).
+    refit_min_visible: float = 0.6
+    # Residual-guided sampling: fraction of candidate centers drawn toward the
+    # cells that still differ most from the target (see sampling.sample_centers).
+    guided_fraction: float = 0.7
+    # Per-shape alpha sweep evaluated when committing a shape (scoring.composite_optimal).
+    alpha_levels: tuple = (60, 90, 120, 150, 180, 210, 235, 255)
     # Compute backend for the shape search: "auto" (GPU if a CUDA device + CuPy
     # are present, else CPU), "cpu" (force the multiprocess CPU path), or "gpu"
     # (force CuPy; silently falls back to CPU if unavailable or it errors).
@@ -43,6 +55,10 @@ class Profile:
             "stopAt": str(self.stop_at),
             "shapeTypes": ",".join(self.shape_types),
             "computeBackend": self.compute_backend,
+            "refitFinal": str(self.refit_final),
+            "refitMinVisible": str(self.refit_min_visible),
+            "guidedFraction": str(self.guided_fraction),
+            "alphaLevels": ",".join(str(a) for a in self.alpha_levels),
         }
         from io import StringIO
         buf = StringIO()
@@ -95,6 +111,13 @@ def load_profile(name: str, text: str) -> Profile:
         p.shape_types = _parse_str_list(section["shapeTypes"])
     backend = getstr("computeBackend", p.compute_backend).lower().strip()
     p.compute_backend = backend if backend in ("auto", "cpu", "gpu") else "auto"
+    # Fidelity knobs (round-trip alongside the sample-budget fields). Absent keys
+    # keep the dataclass defaults, so older / forza-painter INIs load unchanged.
+    p.refit_final = section.getboolean("refitFinal", p.refit_final)
+    p.refit_min_visible = section.getfloat("refitMinVisible", p.refit_min_visible)
+    p.guided_fraction = section.getfloat("guidedFraction", p.guided_fraction)
+    if "alphaLevels" in section:
+        p.alpha_levels = tuple(_parse_int_list(section["alphaLevels"]))
     return p
 
 

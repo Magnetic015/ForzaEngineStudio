@@ -14,8 +14,11 @@ import numpy as np
 from concurrent.futures.process import BrokenProcessPool
 
 from fd6.shapegen.profile import Profile
+from fd6.shapegen.sampling import build_center_cdf, sample_centers
 from fd6.shapegen.scoring import (
     composite,
+    composite_fixed,
+    composite_optimal,
     compute_edge_weight,
     precompute_canvas_error,
     rms_error,
@@ -169,7 +172,7 @@ def _worker_independent_search(args: tuple) -> tuple:
     Result is mathematically identical; just no longer recomputed N times.
     """
     try:
-        (types, n_random, n_mutate, w, h, seed, max_size_frac) = args
+        (types, n_random, n_mutate, w, h, seed, max_size_frac, center_cdf, guided_fraction) = args
         canvas = _W_CANVAS
         target = _W_TARGET
         alpha = _W_ALPHA
@@ -179,12 +182,23 @@ def _worker_independent_search(args: tuple) -> tuple:
         # Precompute once for this batch — see precompute_canvas_error docstring.
         canvas_full_sq, canvas_norm = precompute_canvas_error(canvas, target, alpha, edge_w)
 
+        # Residual-guided placement: pre-draw a center per random candidate biased
+        # toward the cells that still differ most from the target (sampling.py).
+        cxa = cya = None
+        n_rand = max(1, n_random)
+        if center_cdf is not None:
+            cdf, gy, gx = center_cdf
+            cxa, cya = sample_centers(cdf, gy, gx, w, h, n_rand, seed ^ 0x9E3779B1,
+                                      p_guided=guided_fraction)
+
         # Random search
         best_score = float("inf")
         best_color = None
         best_shape = None
-        for _ in range(max(1, n_random)):
+        for i in range(n_rand):
             s = random_shape(rng, w, h, types, max_size_frac=max_size_frac)
+            if cxa is not None and hasattr(s, "x") and hasattr(s, "y"):
+                s.x = float(cxa[i]); s.y = float(cya[i])
             score, color = score_shape(s, canvas, target, alpha,
                                        canvas_full_sq=canvas_full_sq,
                                        canvas_norm=canvas_norm,
@@ -194,12 +208,14 @@ def _worker_independent_search(args: tuple) -> tuple:
         if best_shape is None:
             return (float("inf"), None, None, None)
 
-        # Hill climb on the local best
+        # Annealed hill climb on the local best — step size shrinks across the
+        # budget so early steps explore and late steps fine-tune.
         best_shape.color = best_color
         no_improve = 0
         cap = max(1, n_mutate)
-        for _ in range(cap):
-            cand = best_shape.mutate(rng, w, h)
+        for i in range(cap):
+            scale = max(0.2, 1.0 - i / cap)
+            cand = best_shape.mutate(rng, w, h, scale=scale)
             score, color = score_shape(cand, canvas, target, alpha,
                                        canvas_full_sq=canvas_full_sq,
                                        canvas_norm=canvas_norm,
@@ -305,6 +321,9 @@ class Engine:
         )
         self.canvas = np.ndarray(initial_canvas.shape, dtype=np.uint8, buffer=self._canvas_shm.buf)
         self.canvas[:] = initial_canvas
+        # The exact seed the engine starts from (flat avg / buffer / hybrid base).
+        # Kept so the coverage-aware final polish can rebuild the stack from it.
+        self._seed_canvas = initial_canvas.copy()
 
         self.shapes: list[Shape] = []
 
@@ -341,6 +360,7 @@ class Engine:
         self.start_rms = self.rms
         self._stop = False
         self._pause = False
+        self._center_cdf: tuple | None = None  # cached residual sampling grid
         seed = config.seed or int(time.time() * 1000) & 0xFFFFFFFF
         self.rng = random.Random(seed)
 
@@ -430,6 +450,18 @@ class Engine:
     RESIDUAL_REFRESH_EVERY = 0
     RESIDUAL_BOOST = 4.0
 
+    # Residual-guided candidate placement (sampling.py). The coarse sampling grid
+    # is rebuilt every few commits — the residual barely shifts per single shape,
+    # so reusing it for a handful of iterations keeps the O(H·W) reduction off the
+    # hot path while still steering candidates at the regions that need work.
+    SAMPLER_GRID_N = 48
+    SAMPLER_REFRESH_EVERY = 4
+
+    # Coverage-aware polish only re-fits a shape whose visible (topmost) body is
+    # at least this fraction of its area — keeps the translucency approximation
+    # from bleeding re-coloured covered shapes up through later layers.
+    REFIT_MIN_VISIBLE = 0.6
+
     def _refresh_residual_weight(self) -> None:
         """Reblend `self.edge_weight` (shared memory) with current residual error.
 
@@ -442,6 +474,58 @@ class Engine:
         diff = np.abs(self.canvas.astype(np.float32) - self.target.astype(np.float32)).mean(axis=2) / 255.0
         boost = 1.0 + (self.RESIDUAL_BOOST - 1.0) * diff.astype(np.float32)
         self.edge_weight[:] = self._base_edge_weight * boost
+
+    def _refit_colors_coverage_aware(self) -> None:
+        """Coverage-aware colour polish after generation (geometry frozen).
+
+        A forward-greedy result fits each shape's colour over its FULL footprint —
+        including pixels a later shape will paint over. This pass re-solves each
+        shape's (colour, alpha) over only the pixels where it stays VISIBLE in the
+        final stack (topmost), against the canvas beneath it, so the colour serves
+        the pixels that actually show. Plain forward colour re-fitting can't help a
+        greedy stack (it reproduces the same colours); this can because it uses the
+        final coverage the greedy pass didn't know yet.
+
+        Two O(n·area) passes, no per-shape storage: an int32 owner map records the
+        topmost shape per pixel, then a forward rebuild re-fits + recomposites.
+        Shapes left fully hidden keep their colour (composite_fixed) so the
+        translucent stack underneath is preserved.
+        """
+        n = len(self.shapes)
+        if n == 0:
+            return
+        w, h = self.w, self.h
+        owner = np.full((h, w), -1, dtype=np.int32)
+        for i, s in enumerate(self.shapes):
+            mask_local, bbox = s.rasterize_mask(w, h)
+            x0, y0, x1, y1 = bbox
+            if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
+                continue
+            owner[y0:y1, x0:x1][mask_local >= 128] = i
+        canvas = self._seed_canvas.copy()
+        for i, s in enumerate(self.shapes):
+            mask_local, bbox = s.rasterize_mask(w, h)
+            x0, y0, x1, y1 = bbox
+            if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
+                continue
+            body = mask_local >= 128
+            body_n = int(body.sum())
+            visible_body = int(((owner[y0:y1, x0:x1] == i) & body).sum())
+            # Only re-fit shapes that stay MOSTLY visible. Re-colouring a shape
+            # that a later translucent layer covers would bleed its new colour up
+            # through that layer (perceptible haze for a marginal RMS gain), so
+            # those keep the colour generation already gave them.
+            if body_n > 0 and visible_body / body_n >= self.profile.refit_min_visible:
+                visible = np.where(owner[y0:y1, x0:x1] == i, mask_local, np.uint8(0))
+                canvas, _ = composite_optimal(
+                    canvas, s, self.target, self.alpha_mask, self.edge_weight,
+                    alpha_levels=self.profile.alpha_levels,
+                    fit_mask_local=visible,
+                )
+            else:
+                canvas = composite_fixed(canvas, s, self.alpha_mask)
+        self.canvas[:] = canvas
+        self.rms = rms_error(self.canvas, self.target, self.alpha_mask, self.edge_weight)
 
     def _max_size_frac_for_progress(self, progress: float) -> float:
         """Shape-size schedule. Monotonically decreasing across iteration progress.
@@ -462,7 +546,8 @@ class Engine:
         return 0.10            # 76–100%: 10% canvas — fine detail only
 
     def _parallel_search(self, types: list[str], n_random: int, n_mutate: int,
-                         max_size_frac: float | None = None) -> tuple[float, Shape | None]:
+                         max_size_frac: float | None = None,
+                         center_cdf: tuple | None = None) -> tuple[float, Shape | None]:
         """Dispatch N independent FULL searches in parallel; return (best_score, best_shape).
 
         Each worker does the FULL `random_samples` random search (not a slice of
@@ -481,7 +566,8 @@ class Engine:
         n_mutate = max(1, n_mutate)
         args_list = [
             (types, n_random, n_mutate, self.w, self.h,
-             self.rng.randint(0, 2**31 - 1), max_size_frac)
+             self.rng.randint(0, 2**31 - 1), max_size_frac, center_cdf,
+             self.profile.guided_fraction)
             for _ in range(self._n_workers)
         ]
         best_score = float("inf")
@@ -514,7 +600,8 @@ class Engine:
         return best_score, best_shape
 
     def _search(self, types: list[str], n_random: int, n_mutate: int,
-                max_size_frac: float | None = None) -> tuple[float, Shape | None]:
+                max_size_frac: float | None = None,
+                center_cdf: tuple | None = None) -> tuple[float, Shape | None]:
         """Dispatch one iteration's search to the active backend.
 
         GPU runs in the main process (one batched search). If a GPU op fails at
@@ -523,13 +610,15 @@ class Engine:
         """
         if self._backend == "gpu" and self._gpu is not None:
             try:
-                return self._gpu.search(self.canvas, n_random, n_mutate, max_size_frac, self.rng)
+                return self._gpu.search(self.canvas, n_random, n_mutate, max_size_frac,
+                                        self.rng, center_cdf=center_cdf,
+                                        guided_fraction=self.profile.guided_fraction)
             except Exception as exc:
                 # One-time graceful degrade — never crash a render over the GPU.
                 self._backend = "cpu"
                 self._gpu = None
                 self._gpu_fallback_reason = f"{type(exc).__name__}: {exc}"
-        return self._parallel_search(types, n_random, n_mutate, max_size_frac)
+        return self._parallel_search(types, n_random, n_mutate, max_size_frac, center_cdf=center_cdf)
 
     def run(self) -> Iterable[EngineEvent]:
         p = self.profile
@@ -564,9 +653,15 @@ class Engine:
                 progress = len(self.shapes) / max(1, p.stop_at)
                 size_cap = self._max_size_frac_for_progress(progress)
 
+                # Rebuild the residual-guided sampling grid every few commits.
+                if self._center_cdf is None or len(self.shapes) % self.SAMPLER_REFRESH_EVERY == 0:
+                    self._center_cdf = build_center_cdf(
+                        self.canvas, self.target, self.edge_weight, grid_n=self.SAMPLER_GRID_N,
+                    )
+
                 refined_score, refined = self._search(
                     iter_types, max(1, p.random_samples), max(1, p.mutated_samples),
-                    max_size_frac=size_cap,
+                    max_size_frac=size_cap, center_cdf=self._center_cdf,
                 )
                 # If the GPU degraded to CPU mid-run, announce the new backend once.
                 if self._backend != self._backend_announced:
@@ -586,12 +681,17 @@ class Engine:
                             break
                         refined_score, refined = self._search(
                             iter_types, max(1, p.random_samples), max(1, p.mutated_samples),
-                            max_size_frac=size_cap,
+                            max_size_frac=size_cap, center_cdf=self._center_cdf,
                         )
                         sticker_attempts += 1
                     else:
                         consecutive_skips += 1
                         if consecutive_skips >= MAX_CONSECUTIVE_SKIPS:
+                            # Same coverage-aware polish the normal exit runs —
+                            # this early `done` must not save an unpolished canvas
+                            # when refit_final is on (quality presets 2-4).
+                            if self.profile.refit_final and not self._stop:
+                                self._refit_colors_coverage_aware()
                             yield EngineEvent(
                                 kind="done",
                                 shape_count=len(self.shapes),
@@ -612,8 +712,10 @@ class Engine:
                     continue
 
                 # Commit. Update shared canvas in place so next iteration's
-                # workers see the new state on their next read.
-                new_canvas, new_rms = composite(self.canvas, refined, self.target, self.alpha_mask, self.edge_weight)
+                # workers see the new state on their next read. composite_optimal
+                # also picks the per-shape alpha that fits the region best.
+                new_canvas, new_rms = composite_optimal(self.canvas, refined, self.target, self.alpha_mask, self.edge_weight,
+                                                        alpha_levels=self.profile.alpha_levels)
                 self.canvas[:] = new_canvas
                 self.rms = new_rms
                 self.shapes.append(refined)
@@ -634,6 +736,9 @@ class Engine:
                 if count in save_at or (p.save_every and count % p.save_every == 0):
                     yield EngineEvent(kind="checkpoint", shape_count=count, rms=self.rms)
 
+            # Coverage-aware colour polish before emitting the final canvas (opt-in).
+            if self.profile.refit_final and not self._stop:
+                self._refit_colors_coverage_aware()
             yield EngineEvent(kind="done", shape_count=len(self.shapes), rms=self.rms, canvas=self._preview_canvas())
         except EngineWorkerError as exc:
             # Already a user-facing, actionable message — show it as-is.

@@ -34,8 +34,13 @@ class Shape(ABC):
         """Return (alpha_mask_uint8, bbox). Mask is local to the bbox, not full-image."""
 
     @abstractmethod
-    def mutate(self, rng: random.Random, w: int, h: int) -> "Shape":
-        """Return a mutated copy. Color is mutated by the engine after geometry."""
+    def mutate(self, rng: random.Random, w: int, h: int, scale: float = 1.0) -> "Shape":
+        """Return a mutated copy. Color is mutated by the engine after geometry.
+
+        `scale` (0..1) shrinks every perturbation's step size — the hill-climb
+        anneals it from 1.0 toward ~0.2 across its iterations so early steps
+        explore and late steps fine-tune onto a tight local optimum.
+        """
 
     @abstractmethod
     def to_json(self) -> dict:

@@ -56,6 +56,7 @@ export default function App() {
 
   // top-bar controls
   const [stopAt, setStopAt] = useState(3000);
+  const [quality, setQuality] = useState(2); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 2 = Standard)
   const [canvasWidth, setCanvasWidth] = useState(1000);
   const [canvasHeight, setCanvasHeight] = useState(1000);
   const [stickerMode, setStickerMode] = useState("default");
@@ -191,6 +192,7 @@ export default function App() {
       await startGeneration({
         image: src,
         stopAt: safeStopAt,
+        quality,
         canvasWidth: safeW,
         canvasHeight: safeH,
         sticker,
@@ -310,6 +312,8 @@ export default function App() {
         <TopBar
           stopAt={stopAt}
           setStopAt={setStopAt}
+          quality={quality}
+          setQuality={setQuality}
           canvasWidth={canvasWidth}
           setCanvasWidth={setCanvasWidth}
           canvasHeight={canvasHeight}

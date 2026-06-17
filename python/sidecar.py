@@ -42,6 +42,26 @@ from fd6.shapegen import assist as fes_assist  # noqa: E402
 from fd6.io import FD6Document, save_json  # noqa: E402
 
 
+# Render-quality presets (--quality 1..4). Each bundles the search budget with
+# the four fidelity knobs (guided sampling ratio, per-shape alpha sweep,
+# coverage-aware polish). Level 2 = the shipped default, so existing runs are
+# unchanged; 1 is a fast draft, 3/4 trade time for fidelity.
+QUALITY_PRESETS: dict[int, dict] = {
+    1: {"random_samples": 500,  "mutated_samples": 120, "guided_fraction": 0.55,
+        "alpha_levels": (90, 140, 190, 255),
+        "refit_final": False, "refit_min_visible": 0.6},
+    2: {"random_samples": 1000, "mutated_samples": 200, "guided_fraction": 0.70,
+        "alpha_levels": (60, 90, 120, 150, 180, 210, 235, 255),
+        "refit_final": True,  "refit_min_visible": 0.6},
+    3: {"random_samples": 1600, "mutated_samples": 320, "guided_fraction": 0.80,
+        "alpha_levels": (60, 90, 120, 150, 180, 210, 235, 255),
+        "refit_final": True,  "refit_min_visible": 0.5},
+    4: {"random_samples": 2600, "mutated_samples": 480, "guided_fraction": 0.85,
+        "alpha_levels": (50, 75, 100, 125, 150, 175, 200, 225, 240, 255),
+        "refit_final": True,  "refit_min_visible": 0.5},
+}
+
+
 def emit(obj: dict) -> None:
     """Write one line-delimited JSON event and flush so Rust sees it immediately."""
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -132,6 +152,15 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
+    # Render-quality level: bundles the search budget + the four fidelity knobs
+    # (see QUALITY_PRESETS). 2 = shipped default; 1 fast draft, 3/4 higher fidelity.
+    ap.add_argument("--quality", type=int, choices=[1, 2, 3, 4], default=2,
+                    help="render-quality preset (1 draft .. 4 ultra)")
+    # Coverage-aware colour polish after generation (a few % lower error at the
+    # same layer count, no extra layers). Defaults to the --quality preset;
+    # --refit / --no-refit explicitly overrides it.
+    ap.add_argument("--refit", action=argparse.BooleanOptionalAction, default=None,
+                    help="coverage-aware colour polish of the final shapes")
     # Default-mode canvas fill colour for the fit-buffer ring (the visible W×H
     # frame around the image). Ignored in sticker mode (transparency preserved).
     ap.add_argument("--bg-color", default="#ffffff",
@@ -237,6 +266,10 @@ def main() -> int:
     preview_every = max(1, stop_at // 150)
     progress_every = max(1, stop_at // 300)   # smooth, lightweight progress bar
 
+    # Resolve the render-quality preset; --refit, if given, overrides its polish flag.
+    preset = QUALITY_PRESETS[args.quality]
+    refit_final = preset["refit_final"] if args.refit is None else args.refit
+
     profile = Profile(
         name="balanced",
         stop_at=stop_at,
@@ -244,6 +277,12 @@ def main() -> int:
         preview_every=preview_every,
         compute_backend=args.backend,         # default GPU (OpenCL); engine auto-falls back to CPU if unavailable
         shape_types=["rotated_ellipse"],
+        random_samples=preset["random_samples"],
+        mutated_samples=preset["mutated_samples"],
+        guided_fraction=preset["guided_fraction"],
+        alpha_levels=preset["alpha_levels"],
+        refit_final=refit_final,
+        refit_min_visible=preset["refit_min_visible"],
     )
 
     try:

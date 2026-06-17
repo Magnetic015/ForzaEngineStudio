@@ -168,6 +168,119 @@ def composite(
     return new, rms_error(new, target, alpha_mask, edge_weight)
 
 
+# Per-shape alpha levels searched at commit time. The shape search ranks
+# candidates at a fixed alpha (cheap, just to locate the shape); the winner then
+# picks the opacity that fits its region best — high (near-opaque) for sharp,
+# high-contrast detail, low for soft gradient fills. Spans 60..255 so the search
+# can press a layer hard where the old fixed 128 could not. Both backends commit
+# through this, so the GPU path gains per-shape alpha with no kernel change.
+ALPHA_LEVELS: tuple[int, ...] = (60, 90, 120, 150, 180, 210, 235, 255)
+
+
+def composite_optimal(
+    current: np.ndarray,
+    shape: Shape,
+    target: np.ndarray,
+    alpha_mask: np.ndarray | None = None,
+    edge_weight: np.ndarray | None = None,
+    alpha_levels: tuple[int, ...] = ALPHA_LEVELS,
+    fit_mask_local: np.ndarray | None = None,
+) -> tuple[np.ndarray, float]:
+    """Like `composite`, but also choose the per-shape alpha that minimizes the
+    committed error. One rasterize; for each candidate alpha the optimal RGB is
+    closed-form (`compute_optimal_color`) and the resulting region error is a
+    cheap masked sum, so the whole sweep costs a small constant times one
+    `composite`. Sets `shape.color` to the winning RGBA and returns
+    (new_canvas, new_rms) — identical contract to `composite`.
+
+    `fit_mask_local` (bbox-local uint8, optional) restricts where colour/alpha
+    are FIT without changing where the shape PAINTS: the optimal colour and the
+    error compared across alphas are evaluated only over `fit_mask_local`, while
+    the full shape mask is still composited. The coverage-aware final polish uses
+    this to re-fit each shape over only the pixels where it stays visible in the
+    final stack. When None, fitting and painting both use the shape's own mask;
+    the error is then gated to the shape's mask, which does not change the chosen
+    colour/alpha (out-of-mask pixels are constant across alphas) — so the normal
+    commit path is unaffected.
+    """
+    h, w = current.shape[:2]
+    mask_local, bbox = shape.rasterize_mask(w, h)
+    x0, y0, x1, y1 = bbox
+    if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
+        return current, rms_error(current, target, alpha_mask, edge_weight)
+    fit = mask_local if fit_mask_local is None else fit_mask_local
+    # Sticker/buffer contract: never paint outside the opaque region. The paint
+    # mask is clipped to alpha (matching the original composite()); the fit/colour
+    # mask is the fit region also clipped to alpha.
+    if alpha_mask is not None:
+        region_alpha = alpha_mask[y0:y1, x0:x1]
+        color_mask = np.minimum(fit, region_alpha)
+        paint_mask = np.minimum(mask_local, region_alpha)
+    else:
+        color_mask = fit
+        paint_mask = mask_local
+    region_cur = current[y0:y1, x0:x1].astype(np.float32)
+    region_tgt = target[y0:y1, x0:x1].astype(np.float32)
+    m = (paint_mask.astype(np.float32) / 255.0)[:, :, None]
+    # Region error weight: edge-weighted supersedes the boolean alpha gate, which
+    # supersedes an unweighted sum — mirrors score_shape's three branches so the
+    # chosen alpha minimizes exactly the metric the search optimizes. Gated to the
+    # FIT region so only those pixels drive the alpha choice.
+    fit_gate = (fit > 0).astype(np.float32)
+    if edge_weight is not None:
+        wreg = edge_weight[y0:y1, x0:x1] * fit_gate
+    elif alpha_mask is not None:
+        wreg = (region_alpha > 0).astype(np.float32) * fit_gate
+    else:
+        wreg = fit_gate
+    wreg = wreg[:, :, None]
+    best_err = float("inf")
+    best_color = shape.color
+    best_blended = None
+    for a8 in alpha_levels:
+        color = compute_optimal_color(target, current, color_mask, bbox, a8)
+        a = color[3] / 255.0
+        src = np.array(color[:3], dtype=np.float32)
+        blended = m * (a * src + (1.0 - a) * region_cur) + (1.0 - m) * region_cur
+        diff = blended - region_tgt
+        err = float(((diff * diff) * wreg).sum())
+        if err < best_err:
+            best_err, best_color, best_blended = err, color, blended
+    new = current.copy()
+    if best_blended is not None:
+        new[y0:y1, x0:x1] = np.clip(best_blended, 0, 255).astype(np.uint8)
+    shape.color = best_color
+    return new, rms_error(new, target, alpha_mask, edge_weight)
+
+
+def composite_fixed(current: np.ndarray, shape: Shape,
+                    alpha_mask: np.ndarray | None = None) -> np.ndarray:
+    """Composite `shape` with its EXISTING colour (no re-solve, no scoring).
+
+    Used by the coverage-aware polish to replay a shape whose pixels are all
+    hidden by later shapes: re-fitting it has no visible reference, so keep the
+    colour it was given and just paint it so the translucent stack is unchanged.
+    Clips painting to `alpha_mask` when present, matching composite()/composite_optimal.
+    """
+    h, w = current.shape[:2]
+    mask_local, bbox = shape.rasterize_mask(w, h)
+    x0, y0, x1, y1 = bbox
+    if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
+        return current
+    paint_mask = mask_local
+    if alpha_mask is not None:
+        paint_mask = np.minimum(mask_local, alpha_mask[y0:y1, x0:x1])
+    color = shape.color
+    a = (color[3] / 255.0) if len(color) >= 4 else 1.0
+    region_cur = current[y0:y1, x0:x1].astype(np.float32)
+    src = np.array(color[:3], dtype=np.float32)
+    m = (paint_mask.astype(np.float32) / 255.0)[:, :, None]
+    blended = m * (a * src + (1.0 - a) * region_cur) + (1.0 - m) * region_cur
+    new = current.copy()
+    new[y0:y1, x0:x1] = np.clip(blended, 0, 255).astype(np.uint8)
+    return new
+
+
 # In sticker mode, virtually every "solid" pixel of a candidate shape must sit
 # inside the opaque region. Anything less and the shape's body bleeds past the
 # alpha edge in FH6 (no per-pixel alpha there → solid blob in transparent space).
