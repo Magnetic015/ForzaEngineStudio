@@ -55,6 +55,10 @@ class Profile:
             "stopAt": str(self.stop_at),
             "shapeTypes": ",".join(self.shape_types),
             "computeBackend": self.compute_backend,
+            "refitFinal": str(self.refit_final),
+            "refitMinVisible": str(self.refit_min_visible),
+            "guidedFraction": str(self.guided_fraction),
+            "alphaLevels": ",".join(str(a) for a in self.alpha_levels),
         }
         from io import StringIO
         buf = StringIO()
@@ -107,6 +111,13 @@ def load_profile(name: str, text: str) -> Profile:
         p.shape_types = _parse_str_list(section["shapeTypes"])
     backend = getstr("computeBackend", p.compute_backend).lower().strip()
     p.compute_backend = backend if backend in ("auto", "cpu", "gpu") else "auto"
+    # Fidelity knobs (round-trip alongside the sample-budget fields). Absent keys
+    # keep the dataclass defaults, so older / forza-painter INIs load unchanged.
+    p.refit_final = section.getboolean("refitFinal", p.refit_final)
+    p.refit_min_visible = section.getfloat("refitMinVisible", p.refit_min_visible)
+    p.guided_fraction = section.getfloat("guidedFraction", p.guided_fraction)
+    if "alphaLevels" in section:
+        p.alpha_levels = tuple(_parse_int_list(section["alphaLevels"]))
     return p
 
 
