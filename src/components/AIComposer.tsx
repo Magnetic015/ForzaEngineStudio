@@ -81,7 +81,7 @@ function ModelConfigure({
 }
 
 export default function AIComposer(props: AIComposerProps) {
-  const { onSend, aiRunning, sendBlocked, lastPrompt, apiKey, setApiKey, model, onSelectModel } = props;
+  const { onSend, aiRunning, sendBlocked, apiKey, setApiKey, model, onSelectModel } = props;
   // Semi class component; its instance exposes getEditor()/setContent()… (typed loosely).
   const ref = useRef<any>(null);
   const [hasContent, setHasContent] = useState(false);
@@ -103,13 +103,6 @@ export default function AIComposer(props: AIComposerProps) {
 
   return (
     <>
-      {(
-        <div className="last-prompt">
-          <span key={lastPrompt} className="last-prompt-text" title={lastPrompt}>
-            {lastPrompt}
-          </span>
-        </div>
-      )}
       <AIChatInput
         ref={ref}
         style={{ width: "100%" }}

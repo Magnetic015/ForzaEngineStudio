@@ -54,6 +54,14 @@ export const stopGeneration = () => invoke("stop_generation");
 
 export const importJson = (jsonPath: string) => invoke<string>("import_json", { jsonPath });
 
+// Persist a cropped image (data URL / base64 PNG) to the app-data images dir as
+// <original>_<timestamp>.png; `original` is the cropped source path. Returns the path.
+export const saveCroppedImage = (dataUrl: string, original: string) =>
+  invoke<string>("save_cropped_image", { dataUrl, original });
+
+// Open the directory containing `path` in the OS file manager.
+export const revealInDir = (path: string) => invoke("reveal_in_dir", { path });
+
 // Subscribe to the engine event stream. Resolves to an unlisten fn.
 export const listenEngine = (cb: (e: EngineEvent) => void): Promise<UnlistenFn> =>
   listen("engine-event", (e) => cb(e.payload as EngineEvent));

@@ -78,17 +78,37 @@ body {
   align-items: flex-end;
   gap: var(--space-lg);
   flex-wrap: wrap;
-  padding: var(--space-lg);
+  padding: var(--space-lg) var(--space-lg) var(--space-md);
 }
 
-.spacer {
-  flex: 1;
+/* 渲染质量 slider: by default Semi's track sits mid-wrapper (top 14px) and the
+   level marks render absolutely at top 23px, dangling BELOW the 32px wrapper — so
+   this column reads taller than the 32px dropdowns beside it. Pull the track up,
+   shrink the handle, and tuck the marks directly beneath it so the whole control
+   (handle 3–17px, marks 18–29px → visual centre ~16px) fits inside the 32px box
+   and aligns with the other form controls in the row. */
+.controls .semi-slider-rail,
+.controls .semi-slider-track,
+.controls .semi-slider-dot {
+  top: 8px;
 }
 
-.btn-group {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
+.controls .semi-slider-handle {
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+}
+
+.controls .semi-slider-marks {
+  top: 18px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* keep each mark label on one line: the rightmost "极致" sits at the track's 100%
+   point with no width and would otherwise wrap character-by-character. */
+.controls .semi-slider-mark {
+  white-space: nowrap;
 }
 
 /* label + control vertical stack */
@@ -130,14 +150,16 @@ body {
   background-clip: content-box;
 }
 
+/* progress bar gets its own full-width row below the controls */
 .progress-wrap {
   padding: 0 var(--space-lg) var(--space-lg);
 }
 
 .progress-label {
-  margin-top: var(--space-md);
+  margin-bottom: var(--space-md);
   font-size: 12px;
   color: var(--muted);
+  text-align: right;
 }
 
 /* ── body: 左右面板（宽度可拖动）─────────────────────────────── */
@@ -154,6 +176,16 @@ body {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+
+/* crop entry button in the left area's top-right corner */
+.left-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-lg) 0;
+  flex-shrink: 0;
 }
 
 /* 可拖动分隔条 */
@@ -371,14 +403,17 @@ body {
 
 /* echo of the last submitted prompt, bottom-left of the composer: one line,
    width-clamped with ellipsis, rolling up into view whenever it changes */
-.last-prompt {
-  flex: 1 1 auto;
+/* 系统提示：引擎 / AI 状态通知（移自预览区下方，置于 AI 输入区上方） */
+.system-notice {
+  flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
   height: 18px;
+  display: flex;
+  justify-content: flex-end;
 }
 
-.last-prompt-text {
+.system-notice-text {
   display: block;
   line-height: 18px;
   white-space: nowrap;
@@ -486,6 +521,16 @@ body {
   min-width: 0;
 }
 
+/* action buttons in the preview pane's top-right corner */
+.preview-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  flex-shrink: 0;
+}
+
 .preview-box {
   flex: 1;
   position: relative;
@@ -513,11 +558,42 @@ body {
   text-align: center;
 }
 
-.status {
-  margin-top: var(--space-md);
+/* ── crop modal (Semi Cropper) ─────────────────────────────────────────────── */
+.crop-stage {
+  background: repeating-conic-gradient(#1a2029 0% 25%, #141a22 0% 50%) 50% / 24px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.crop-empty {
+  height: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.crop-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+}
+
+.crop-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
   font-size: 12px;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.crop-slider>span {
+  flex: 0 0 32px;
+}
+
+.crop-slider .semi-slider {
+  flex: 1;
 }
