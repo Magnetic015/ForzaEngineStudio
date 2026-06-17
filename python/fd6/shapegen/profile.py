@@ -37,6 +37,15 @@ class Profile:
     # are present, else CPU), "cpu" (force the multiprocess CPU path), or "gpu"
     # (force CuPy; silently falls back to CPU if unavailable or it errors).
     compute_backend: str = "auto"
+    # Game-faithful OPAQUE mode. The livery injector (ds_v9) draws every shape as
+    # a SOLID layer — it discards per-shape alpha (writes RGBA with alpha forced
+    # to 255) and seeds no under-paint, so the in-game render is opaque
+    # painter's-algorithm. When True the engine matches that exactly: every shape
+    # is committed AND searched at alpha 255, so the saved colours are the ones
+    # the game actually shows and the live preview is WYSIWYG. False keeps the
+    # legacy translucent stack (lower local RMS, but it does NOT survive
+    # injection). Production (sidecar) runs ON; see [[engine-fidelity-levers]].
+    opaque: bool = False
 
     def to_ini(self) -> str:
         cp = configparser.ConfigParser()
@@ -59,6 +68,7 @@ class Profile:
             "refitMinVisible": str(self.refit_min_visible),
             "guidedFraction": str(self.guided_fraction),
             "alphaLevels": ",".join(str(a) for a in self.alpha_levels),
+            "opaque": str(self.opaque),
         }
         from io import StringIO
         buf = StringIO()
@@ -118,6 +128,7 @@ def load_profile(name: str, text: str) -> Profile:
     p.guided_fraction = section.getfloat("guidedFraction", p.guided_fraction)
     if "alphaLevels" in section:
         p.alpha_levels = tuple(_parse_int_list(section["alphaLevels"]))
+    p.opaque = section.getboolean("opaque", p.opaque)
     return p
 
 

@@ -360,9 +360,13 @@ class OpenCLEllipseSearcher:
     """
 
     def __init__(self, target: np.ndarray, alpha_mask: Optional[np.ndarray],
-                 edge_weight: np.ndarray) -> None:
+                 edge_weight: np.ndarray, search_alpha: float = _SEARCH_ALPHA) -> None:
         import pyopencl as cl
         self.cl = cl
+        # Alpha the GPU ranks candidates at. Defaults to the translucent search
+        # alpha; the engine passes 1.0 in opaque mode so ranking matches an
+        # opaque commit (a shape good translucent can be harmful drawn solid).
+        self._search_alpha = float(search_alpha)
         self.h, self.w = target.shape[:2]
         self._target_np = np.ascontiguousarray(target, dtype=np.float32)
         self._edge_np = np.ascontiguousarray(edge_weight, dtype=np.float32)
@@ -410,7 +414,7 @@ class OpenCLEllipseSearcher:
             self._buf_canvas, self._buf_target, self._buf_edge, self._buf_alpha,
             buf_p, buf_out,
             np.int32(self.w), np.int32(self.h), np.int32(T), np.int32(B),
-            np.float32(full_sq), np.float32(self._ninv), np.float32(_SEARCH_ALPHA),
+            np.float32(full_sq), np.float32(self._ninv), np.float32(self._search_alpha),
             np.int32(1 if self._has_alpha else 0),
         )
         cl.enqueue_copy(self.queue, out, buf_out)
@@ -469,7 +473,10 @@ class OpenCLEllipseSearcher:
                     break
 
         cx, cy, rx, ry, ang = (float(v) for v in best)
-        return best_score, RotatedEllipse(color=(0, 0, 0, 128), x=cx, y=cy, rx=rx, ry=ry, angle=ang)
+        # Stub colour at the search alpha for self-consistency; the engine
+        # overwrites it via composite_optimal at commit either way.
+        stub_alpha = int(round(self._search_alpha * 255))
+        return best_score, RotatedEllipse(color=(0, 0, 0, stub_alpha), x=cx, y=cy, rx=rx, ry=ry, angle=ang)
 
 
 class EllipseBatchSearcher:
