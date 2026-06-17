@@ -687,6 +687,11 @@ class Engine:
                     else:
                         consecutive_skips += 1
                         if consecutive_skips >= MAX_CONSECUTIVE_SKIPS:
+                            # Same coverage-aware polish the normal exit runs —
+                            # this early `done` must not save an unpolished canvas
+                            # when refit_final is on (quality presets 2-4).
+                            if self.profile.refit_final and not self._stop:
+                                self._refit_colors_coverage_aware()
                             yield EngineEvent(
                                 kind="done",
                                 shape_count=len(self.shapes),
