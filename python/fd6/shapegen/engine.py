@@ -558,17 +558,18 @@ class Engine:
         Per-candidate scoring cost is O(bbox_area) and bbox area scales with
         `max_size_frac²`, so an early tier with `max_size_frac=1.0` (canvas-
         spanning shapes) is ~16× more expensive than the legacy `0.25`
-        default. The values below keep T1 noticeably larger than legacy (for
-        tonal coverage) without exploding scoring cost at higher
-        max_resolutions (4K / 8K targets).
+        default. The four caps come from `Profile.size_caps` (default
+        0.30/0.22/0.15/0.10) — large early for tonal blocks, small late for
+        detail; a steeper tail pushes more budget onto pixel-scale detail.
         """
+        c = self.profile.size_caps
         if progress < 0.25:
-            return 0.30        # 0–25%: ~30% canvas — modest bump over legacy for tonal blocks
+            return c[0]        # 0–25%: tonal blocks
         if progress < 0.50:
-            return 0.22        # 26–50%: ~22% canvas
+            return c[1]        # 26–50%
         if progress < 0.75:
-            return 0.15        # 51–75%: ~15% canvas
-        return 0.10            # 76–100%: 10% canvas — fine detail only
+            return c[2]        # 51–75%
+        return c[3]            # 76–100%: fine detail only
 
     def _parallel_search(self, types: list[str], n_random: int, n_mutate: int,
                          max_size_frac: float | None = None,

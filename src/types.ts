@@ -13,6 +13,12 @@ export interface ProgressState {
   rms: number;
 }
 
+// One sample of the live RMS curve: committed-shape count + the RMS at that point.
+export interface RmsPoint {
+  n: number;
+  rms: number;
+}
+
 // ── Component prop contracts (frozen here; App + leaves implement against them) ──
 
 export interface TopBarProps {
@@ -32,6 +38,8 @@ export interface TopBarProps {
   setBackend: (v: string) => void;
   assistMode: string; // "off" | "on"
   setAssistMode: (v: string) => void;
+  flattenMode: string; // "off" | "on" — opt-in poster-style simplify (off by default; hurts detailed art)
+  setFlattenMode: (v: string) => void;
   progress: ProgressState;
 }
 
@@ -69,6 +77,7 @@ export interface CropModalProps {
 
 export interface PreviewPaneProps {
   previewSrc: string; // "" → show placeholder
+  rmsHistory: RmsPoint[]; // live RMS-vs-shape-count samples for the toolbar sparkline
   // action buttons live in the preview pane's top-right corner
   running: boolean;
   canStart: boolean; // a target image is selected and not running

@@ -156,9 +156,11 @@ def main() -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
     # Render-quality level: bundles the search budget + the four fidelity knobs
-    # (see QUALITY_PRESETS). 2 = shipped default; 1 fast draft, 3/4 higher fidelity.
-    ap.add_argument("--quality", type=int, choices=[1, 2, 3, 4], default=2,
-                    help="render-quality preset (1 draft .. 4 ultra)")
+    # (see QUALITY_PRESETS). 3 = default (精细); 1 fast draft, 2 standard, 4 ultra.
+    # Bumped from 2 to 3: measured clearly closer to the original on detailed art
+    # (ssim 0.807 -> 0.821) for a modest extra cost, now that simplify is off.
+    ap.add_argument("--quality", type=int, choices=[1, 2, 3, 4], default=3,
+                    help="render-quality preset (1 draft, 2 standard, 3 fine [default], 4 ultra)")
     # Coverage-aware colour polish after generation (a few % lower error at the
     # same layer count, no extra layers). Defaults to the --quality preset;
     # --refit / --no-refit explicitly overrides it.
@@ -172,9 +174,17 @@ def main() -> int:
     # assists; each can be toggled off with its --no-* form. External image-model
     # assets (a flattened under-paint / a saliency map) override the local ones.
     ap.add_argument("--assist", action="store_true",
-                    help="enable model-assist (render-optimize + hybrid base + saliency guidance)")
-    ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=True,
-                    help="flatten the target into clean flat-color regions before rendering")
+                    help="enable model-assist. Defaults to saliency guidance only; render-optimize "
+                         "(--assist-simplify) and hybrid base (--assist-base) are explicit opt-ins "
+                         "because both reduce fidelity-to-original on detailed art (the injector draws "
+                         "opaque shapes only, and simplify pre-bands the target).")
+    ap.add_argument("--assist-simplify", action=argparse.BooleanOptionalAction, default=False,
+                    help="flatten the target into clean flat-color regions before rendering. OFF by "
+                         "default: bilateral+posterize discards the smooth gradients and fine detail "
+                         "of high-frequency art before the engine sees them, so the opaque render "
+                         "reproduces a banded/washed target (measured: it LOWERS fidelity-to-original "
+                         "at every quality level on a detailed portrait). Opt in for poster-style "
+                         "sources where flat regions genuinely cut the layer count.")
     ap.add_argument("--assist-base", action=argparse.BooleanOptionalAction, default=False,
                     help="seed the canvas with a low-frequency under-paint (hybrid render). OFF by "
                          "default: the injector draws shapes only, so an under-paint is invisible "
@@ -182,7 +192,8 @@ def main() -> int:
     ap.add_argument("--assist-importance", action=argparse.BooleanOptionalAction, default=True,
                     help="bias shape placement with a saliency/structure importance map")
     ap.add_argument("--assist-levels", type=int, default=12,
-                    help="posterize level count for render-optimization / base")
+                    help="posterize level count for render-optimization / base "
+                         "(only used when --assist-simplify or --assist-base is enabled)")
     ap.add_argument("--base-image", default="",
                     help="external under-paint image (e.g. an image-model flattened render)")
     ap.add_argument("--importance-map", default="",

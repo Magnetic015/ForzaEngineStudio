@@ -14,7 +14,7 @@ import {
   type Cand,
   type EngineEvent,
 } from "./api/tauri";
-import { type ProgressState } from "./types";
+import { type ProgressState, type RmsPoint } from "./types";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { useSplitter } from "./hooks/useSplitter";
 import TopBar from "./components/TopBar";
@@ -60,13 +60,17 @@ export default function App() {
 
   // top-bar controls
   const [stopAt, setStopAt] = useState(3000);
-  const [quality, setQuality] = useState(2); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 2 = Standard)
+  const [quality, setQuality] = useState(3); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 3 = 精细; measured clearly closer to the original than 2, 极致 is the one-click max for final exports)
   const [canvasWidth, setCanvasWidth] = useState(1000);
   const [canvasHeight, setCanvasHeight] = useState(1000);
   const [stickerMode, setStickerMode] = useState("default");
   const [bgColor, setBgColor] = useState("#ffffff");
   const [backend, setBackend] = useState("gpu");
   const [assistMode, setAssistMode] = useState("on");
+  // Poster-style flatten (bilateral + posterize). OFF by default: it discards the
+  // smooth gradients / fine detail of high-frequency art before the opaque engine
+  // sees them. Opt-in for genuinely flat poster sources where it cuts layers.
+  const [flattenMode, setFlattenMode] = useState("off");
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
@@ -75,6 +79,9 @@ export default function App() {
   const [status, setStatus] = useState(READY_STATUS);
   const [progress, setProgress] = useState<ProgressState>({ n: 0, total: 0, rms: 0 });
   const [previewSrc, setPreviewSrc] = useState("");
+  // Live RMS curve for the preview overlay; appended per progress/frame event,
+  // cleared on Start/Reset. Kept monotonic in shape count (see pushRms).
+  const [rmsHistory, setRmsHistory] = useState<RmsPoint[]>([]);
 
   // crop modal
   const [cropOpen, setCropOpen] = useState(false);
@@ -186,6 +193,7 @@ export default function App() {
     }
     const sticker = stickerMode === "sticker";
     const assist = assistMode === "on";
+    const flatten = flattenMode === "on";
     const safeStopAt = intOrDefault(stopAt, 3000);
     const safeW = intOrDefault(canvasWidth, 1000);
     const safeH = intOrDefault(canvasHeight, 1000);
@@ -201,6 +209,7 @@ export default function App() {
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
     );
     setProgress({ n: 0, total: safeStopAt, rms: 0 });
+    setRmsHistory([]); // fresh curve for the new render
     try {
       await startGeneration({
         image: src,
@@ -211,6 +220,7 @@ export default function App() {
         sticker,
         backend,
         assist,
+        flatten,
         bgColor,
         generation: gen,
       });
@@ -268,6 +278,7 @@ export default function App() {
   function resetPreview() {
     if (running) return;
     setPreviewSrc("");
+    setRmsHistory([]);
     setProgress({ n: 0, total: 0, rms: 0 });
     setSavedJsonPath("");
     setStatus(READY_STATUS);
@@ -313,6 +324,13 @@ export default function App() {
     }
   }
 
+  // Append one RMS sample for the preview sparkline. Shape count is monotonic, so
+  // drop any out-of-order/duplicate event (progress + frame can report the same n).
+  const pushRms = (n: number, rms: number) => {
+    if (!Number.isFinite(n) || !Number.isFinite(rms)) return;
+    setRmsHistory((h) => (h.length && n <= h[h.length - 1].n ? h : [...h, { n, rms }]));
+  };
+
   // ── engine event stream ───────────────────────────────────────────────────────
   useEngineEvents((p: EngineEvent) => {
     // Drop events from a superseded render: after a Stop→Start, the old sidecar's
@@ -330,14 +348,17 @@ export default function App() {
       }
       case "progress":
         setProgress({ n: p.shape_count, total: p.total, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         break;
       case "frame":
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         break;
       case "done":
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total ?? p.shape_count, rms: p.rms });
+        pushRms(p.shape_count, p.rms);
         // Only a real saved path (not a "(save failed: …)" marker) enables 打开保存目录.
         if (p.json_path && !p.json_path.startsWith("(")) setSavedJsonPath(p.json_path);
         setStatus(
@@ -381,6 +402,8 @@ export default function App() {
           setBackend={setBackend}
           assistMode={assistMode}
           setAssistMode={setAssistMode}
+          flattenMode={flattenMode}
+          setFlattenMode={setFlattenMode}
           progress={progress}
         />
       </header>
@@ -454,6 +477,7 @@ export default function App() {
         <section className="right">
           <PreviewPane
             previewSrc={previewSrc}
+            rmsHistory={rmsHistory}
             running={running}
             canStart={canStart}
             savedJsonPath={savedJsonPath}

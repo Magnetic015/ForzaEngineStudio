@@ -35,18 +35,25 @@ def build_center_cdf(
 ) -> tuple[np.ndarray, int, int]:
     """Build a flat CDF over a coarse grid from the current residual.
 
-    Cell weight ∝ (summed per-pixel residual)**sharpen, restricted to the scored
-    region (edge_weight > 0 — folds in the alpha gate). `sharpen` > 1 biases
-    sampling toward the worst cells while the floor from un-sharpened mass keeps
-    moderate cells reachable. Returns (cdf flat float64 of length gy*gx, gy, gx).
-    When nothing remains to fix, falls back to a uniform CDF over valid cells.
+    Cell weight ∝ (sum over cell of per-pixel residual × edge_weight)**sharpen,
+    restricted to the scored region (edge_weight > 0 — folds in the alpha gate).
+    Multiplying
+    by the per-pixel edge magnitude (not just gating cells by it) drives
+    candidates toward residual × importance — the same importance map the search ranks by and the
+    optimal-colour solver now weights by, so the candidate budget concentrates on
+    pixels that drive the score. `sharpen` > 1 biases sampling toward the worst
+    cells while the un-sharpened mass keeps moderate cells reachable. The
+    `p_guided` tail in `sample_centers` still covers smooth high-residual
+    regions, so this bias doesn't strand them. Returns (cdf flat float64 of
+    length gy*gx, gy, gx). When nothing remains to fix, falls back to a uniform
+    CDF over valid cells.
     """
     h, w = canvas.shape[:2]
     gy = max(1, min(grid_n, h))
     gx = max(1, min(grid_n, w))
     resid = np.abs(canvas.astype(np.float32) - target.astype(np.float32)).mean(axis=2)
     if edge_weight is not None:
-        valid = (edge_weight > 0).astype(np.float32)
+        valid = edge_weight.astype(np.float32)
         resid = resid * valid
     else:
         valid = None
@@ -54,9 +61,12 @@ def build_center_cdf(
     total = float(cell.sum())
     if total <= 1e-9:
         # Canvas already matches everywhere (or fully masked) — sample uniformly
-        # over whichever cells are inside the scored region.
+        # over whichever cells are inside the scored region. Gate on positive
+        # weight explicitly: `valid` now carries the edge MAGNITUDE, so a future
+        # importance map with a tiny non-zero floor outside the alpha region must
+        # not leak those cells back into the uniform pool.
         if valid is not None:
-            cell = (_block_sum(valid, gy, gx) > 0).astype(np.float64)
+            cell = (_block_sum((valid > 0).astype(np.float32), gy, gx) > 0).astype(np.float64)
         if cell.sum() <= 0:
             cell = np.ones((gy, gx), dtype=np.float64)
     else:
