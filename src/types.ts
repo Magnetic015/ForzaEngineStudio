@@ -87,4 +87,9 @@ export interface PreviewPaneProps {
   onStop: () => void; // terminate the in-flight render
   onImportJson: () => void;
   onResetPreview: () => void;
+  // ── in-game layer injection (next to the render button) ──
+  injecting: boolean; // an injection sidecar is in flight
+  canInject: boolean; // a shape JSON is available and nothing else is running
+  onInject: () => void; // write the current design into the running game
+  onStopInject: () => void; // terminate the in-flight injection
 }

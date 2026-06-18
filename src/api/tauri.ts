@@ -40,6 +40,18 @@ export type EngineEvent = (
   | { type: "log"; message: string }
 ) & { gen?: number }; // gen: render generation injected by the Rust side (absent on log)
 
+// `inject-event` payloads — line-JSON the Rust side forwards verbatim from the
+// injection sidecar (a channel separate from the render `engine-event` stream).
+export type InjectEvent = (
+  | { type: "status"; message: string; severity: "info" | "success" | "warning" | "error" }
+  | { type: "scan"; scanned: number; total: number; hits: number } // memory-region scan progress
+  | { type: "write"; written: number; total: number } // per-shape write progress
+  | { type: "done"; success: boolean; shapes_written: number; message: string }
+  | { type: "error"; message: string }
+  | { type: "exit"; code: number | null }
+  | { type: "log"; message: string }
+) & { gen?: number }; // gen: injection generation injected by the Rust side (absent on log)
+
 // ── Tauri command wrappers ────────────────────────────────────────────────────
 // NOTE: keys stay camelCase here; Tauri auto-maps them to the Rust snake_case
 // params (stopAt → stop_at, apiKey → api_key, jsonPath → json_path, ...).
@@ -52,6 +64,16 @@ export const aiProcessImage = (args: { image: string; apiKey: string; model: str
 export const startGeneration = (p: StartParams) => invoke("start_generation", { ...p });
 
 export const stopGeneration = () => invoke("stop_generation");
+
+// Inject a rendered shape design (jsonPath) into a running Forza game process.
+// `profile` is the game profile key ("fh6" by default); `generation` is the
+// injection id assigned by the frontend before invoking (tags every inject-event
+// so a stopped run's late events are dropped). Returns immediately; progress +
+// result arrive via the `inject-event` stream.
+export const injectLayers = (args: { jsonPath: string; profile: string; generation: number }) =>
+  invoke("inject_layers", args);
+
+export const stopInjection = () => invoke("stop_injection");
 
 export const importJson = (jsonPath: string) => invoke<string>("import_json", { jsonPath });
 
@@ -66,6 +88,10 @@ export const revealInDir = (path: string) => invoke("reveal_in_dir", { path });
 // Subscribe to the engine event stream. Resolves to an unlisten fn.
 export const listenEngine = (cb: (e: EngineEvent) => void): Promise<UnlistenFn> =>
   listen("engine-event", (e) => cb(e.payload as EngineEvent));
+
+// Subscribe to the injection event stream. Resolves to an unlisten fn.
+export const listenInject = (cb: (e: InjectEvent) => void): Promise<UnlistenFn> =>
+  listen("inject-event", (e) => cb(e.payload as InjectEvent));
 
 // ── dialog helpers ────────────────────────────────────────────────────────────
 export async function pickImageFile(): Promise<string | null> {

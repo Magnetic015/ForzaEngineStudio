@@ -9,6 +9,7 @@ the entry point with a leading subcommand:
     fes-engine generate    --image ... --stop-at ...      (-> sidecar.main)
     fes-engine ai          --image ... --api-key ...      (-> image_process.main)
     fes-engine render-json --json ...                     (-> render_json.main)
+    fes-engine inject      --json ... [--profile fh6]     (-> inject_sidecar.main)
 
 The subcommand is popped off argv before delegating, so each tool's own
 argparse sees exactly the flags it already expects — identical to running the
@@ -25,7 +26,7 @@ from pathlib import Path
 # them on the frozen import path).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-_TOOLS = ("generate", "ai", "render-json")
+_TOOLS = ("generate", "ai", "render-json", "inject")
 
 
 def main() -> int:
@@ -45,6 +46,8 @@ def main() -> int:
         from image_process import main as run
     elif cmd == "render-json":
         from render_json import main as run
+    elif cmd == "inject":
+        from inject_sidecar import main as run
     else:
         sys.stderr.write(f"fes-engine: unknown subcommand {cmd!r} (expected one of {_TOOLS})\n")
         return 2
