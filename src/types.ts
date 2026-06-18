@@ -38,6 +38,8 @@ export interface TopBarProps {
   setBackend: (v: string) => void;
   assistMode: string; // "off" | "on"
   setAssistMode: (v: string) => void;
+  flattenMode: string; // "off" | "on" — opt-in poster-style simplify (off by default; hurts detailed art)
+  setFlattenMode: (v: string) => void;
   progress: ProgressState;
 }
 

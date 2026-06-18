@@ -21,6 +21,7 @@ export interface StartParams {
   sticker: boolean;
   backend: string;
   assist: boolean;
+  flatten: boolean; // opt-in poster-style simplify (--assist-simplify); off by default
   bgColor: string;
   generation: number; // render id assigned by the frontend before invoking
 }

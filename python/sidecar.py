@@ -156,9 +156,11 @@ def main() -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--backend", default="gpu", choices=["gpu", "cpu", "auto"])
     # Render-quality level: bundles the search budget + the four fidelity knobs
-    # (see QUALITY_PRESETS). 2 = shipped default; 1 fast draft, 3/4 higher fidelity.
-    ap.add_argument("--quality", type=int, choices=[1, 2, 3, 4], default=2,
-                    help="render-quality preset (1 draft .. 4 ultra)")
+    # (see QUALITY_PRESETS). 3 = default (精细); 1 fast draft, 2 standard, 4 ultra.
+    # Bumped from 2 to 3: measured clearly closer to the original on detailed art
+    # (ssim 0.807 -> 0.821) for a modest extra cost, now that simplify is off.
+    ap.add_argument("--quality", type=int, choices=[1, 2, 3, 4], default=3,
+                    help="render-quality preset (1 draft, 2 standard, 3 fine [default], 4 ultra)")
     # Coverage-aware colour polish after generation (a few % lower error at the
     # same layer count, no extra layers). Defaults to the --quality preset;
     # --refit / --no-refit explicitly overrides it.

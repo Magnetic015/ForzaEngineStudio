@@ -60,13 +60,17 @@ export default function App() {
 
   // top-bar controls
   const [stopAt, setStopAt] = useState(3000);
-  const [quality, setQuality] = useState(2); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 2 = Standard)
+  const [quality, setQuality] = useState(3); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 3 = 精细; measured clearly closer to the original than 2, 极致 is the one-click max for final exports)
   const [canvasWidth, setCanvasWidth] = useState(1000);
   const [canvasHeight, setCanvasHeight] = useState(1000);
   const [stickerMode, setStickerMode] = useState("default");
   const [bgColor, setBgColor] = useState("#ffffff");
   const [backend, setBackend] = useState("gpu");
   const [assistMode, setAssistMode] = useState("on");
+  // Poster-style flatten (bilateral + posterize). OFF by default: it discards the
+  // smooth gradients / fine detail of high-frequency art before the opaque engine
+  // sees them. Opt-in for genuinely flat poster sources where it cuts layers.
+  const [flattenMode, setFlattenMode] = useState("off");
 
   // AI composer
   const [apiKey, setApiKey] = useState("");
@@ -189,6 +193,7 @@ export default function App() {
     }
     const sticker = stickerMode === "sticker";
     const assist = assistMode === "on";
+    const flatten = flattenMode === "on";
     const safeStopAt = intOrDefault(stopAt, 3000);
     const safeW = intOrDefault(canvasWidth, 1000);
     const safeH = intOrDefault(canvasHeight, 1000);
@@ -215,6 +220,7 @@ export default function App() {
         sticker,
         backend,
         assist,
+        flatten,
         bgColor,
         generation: gen,
       });
@@ -396,6 +402,8 @@ export default function App() {
           setBackend={setBackend}
           assistMode={assistMode}
           setAssistMode={setAssistMode}
+          flattenMode={flattenMode}
+          setFlattenMode={setFlattenMode}
           progress={progress}
         />
       </header>
