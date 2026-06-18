@@ -81,6 +81,7 @@ fn start_generation(
     sticker: bool,
     backend: String,
     assist: bool,
+    flatten: bool,
     quality: u32,
     bg_color: String,
     generation: u64,
@@ -113,10 +114,15 @@ fn start_generation(
     if sticker {
         cmd.arg("--sticker");
     }
-    // Model-assist: render-optimize + hybrid base + saliency guidance (fewer
-    // layers, more detail). The sidecar builds the assist inputs locally.
-    if assist {
+    // Model-assist: saliency guidance by default. `flatten` opts into poster-style
+    // simplify (--assist-simplify), which the sidecar runs only inside the assist
+    // pipeline — so flatten implies --assist. Without flatten, simplify stays off
+    // (the sidecar default) because it discards detail on high-frequency art.
+    if assist || flatten {
         cmd.arg("--assist");
+    }
+    if flatten {
+        cmd.arg("--assist-simplify");
     }
     #[cfg(windows)]
     {

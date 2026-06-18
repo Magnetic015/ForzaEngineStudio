@@ -21,6 +21,8 @@ export default function TopBar(props: TopBarProps) {
     setBackend,
     assistMode,
     setAssistMode,
+    flattenMode,
+    setFlattenMode,
     progress,
   } = props;
 
@@ -119,6 +121,23 @@ export default function TopBar(props: TopBarProps) {
           <Select
             value={assistMode}
             onChange={(v) => setAssistMode(v as string)}
+            style={{ width: 96 }}
+            optionList={[
+              { value: "off", label: "关闭" },
+              { value: "on", label: "开启" },
+            ]}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">
+            海报化
+            <Tooltip content="把平滑渐变压成色块、保留硬边——仅适合海报/扁平插画，能减少图层；高细节图（照片、厚涂）会丢渐变与细节，默认关闭">
+              <IconHelpCircle size="small" className="field-help" />
+            </Tooltip>
+          </span>
+          <Select
+            value={flattenMode}
+            onChange={(v) => setFlattenMode(v as string)}
             style={{ width: 96 }}
             optionList={[
               { value: "off", label: "关闭" },
