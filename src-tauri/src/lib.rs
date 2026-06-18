@@ -344,6 +344,7 @@ fn inject_layers(
         Some(s) => s,
         None => {
             let _ = child.kill();
+            let _ = child.wait(); // reap so the child's OS handle isn't leaked
             if let Ok(mut slot) = state.pid.lock() {
                 *slot = None;
             }
@@ -354,6 +355,7 @@ fn inject_layers(
         Some(s) => s,
         None => {
             let _ = child.kill();
+            let _ = child.wait(); // reap so the child's OS handle isn't leaked
             if let Ok(mut slot) = state.pid.lock() {
                 *slot = None;
             }
