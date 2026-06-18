@@ -46,6 +46,21 @@ class Profile:
     # legacy translucent stack (lower local RMS, but it does NOT survive
     # injection). Production (sidecar) runs ON; see [[engine-fidelity-levers]].
     opaque: bool = False
+    # Shape-size schedule: the max ellipse dimension (as a fraction of the canvas)
+    # allowed at progress tiers <25% / <50% / <75% / >=75% of the layer budget.
+    # Monotonically decreasing — big tonal blocks early, fine detail late. Both
+    # backends honour it via max_size_frac. Default reproduces the long-standing
+    # 0.30→0.10 schedule; a steeper tail (e.g. ...,0.04) pushes more of the budget
+    # onto pixel-scale detail for high-frequency targets. Exactly 4 entries — see
+    # Engine._max_size_frac_for_progress. Appended last so the dataclass field
+    # order stays append-only (no positional-constructor shift).
+    size_caps: tuple = (0.30, 0.22, 0.15, 0.10)
+
+    def __post_init__(self) -> None:
+        # The size schedule indexes size_caps[0..3]; reject a malformed override
+        # here (clear error at construction) instead of crashing mid-generation.
+        if len(tuple(self.size_caps)) != 4:
+            raise ValueError(f"Profile.size_caps must have exactly 4 entries, got {self.size_caps!r}")
 
     def to_ini(self) -> str:
         cp = configparser.ConfigParser()
@@ -69,6 +84,7 @@ class Profile:
             "guidedFraction": str(self.guided_fraction),
             "alphaLevels": ",".join(str(a) for a in self.alpha_levels),
             "opaque": str(self.opaque),
+            "sizeCaps": ",".join(str(c) for c in self.size_caps),
         }
         from io import StringIO
         buf = StringIO()
@@ -129,6 +145,11 @@ def load_profile(name: str, text: str) -> Profile:
     if "alphaLevels" in section:
         p.alpha_levels = tuple(_parse_int_list(section["alphaLevels"]))
     p.opaque = section.getboolean("opaque", p.opaque)
+    if "sizeCaps" in section:
+        caps = tuple(float(x.strip()) for x in section["sizeCaps"].split(",") if x.strip())
+        if len(caps) != 4:
+            raise ValueError(f"sizeCaps must list exactly 4 fractions, got {section['sizeCaps']!r}")
+        p.size_caps = caps
     return p
 
 

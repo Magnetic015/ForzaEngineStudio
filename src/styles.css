@@ -558,6 +558,69 @@ body {
   text-align: center;
 }
 
+/* live RMS sparkline in the preview toolbar (left), inline with the buttons.
+   The sparkline flexes (min-width:0) so it shrinks to fit a narrow preview pane
+   instead of overflowing left over the splitter; the label + value stay fixed. */
+.rms-chart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto; /* sit at the far left; action buttons stay right */
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+/* stacked readout: current value on top, "RMS" caption beneath */
+.rms-chart-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  line-height: 1.15;
+  flex-shrink: 0;
+  min-width: 42px;
+}
+
+.rms-chart-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.rms-chart-svg {
+  flex: 1 1 80px;
+  min-width: 0;
+  max-width: 160px;
+  height: 44px;
+  overflow: visible;
+}
+
+.rms-chart-area {
+  fill: var(--accent);
+  opacity: 0.12;
+  stroke: none;
+}
+
+.rms-chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.rms-chart-dot {
+  fill: var(--accent);
+}
+
+.rms-chart-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── crop modal (Semi Cropper) ─────────────────────────────────────────────── */
 .crop-stage {
   background: repeating-conic-gradient(#1a2029 0% 25%, #141a22 0% 50%) 50% / 24px 24px;
