@@ -41,8 +41,9 @@ class FakeProc:
     doesn't skip the slot); writes are captured by field offset for assertions.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shape_id: int = 102) -> None:
         self.writes: dict[int, bytes] = {}
+        self._shape_id = shape_id
 
     def try_read(self, addr: int, size: int) -> bytes:
         off = addr & 0xFF
@@ -54,8 +55,8 @@ class FakeProc:
             return b"\x00\x00\x00\x00"
         if off == fhi.LAYER_MASK_OFF:     # 0 or 1
             return b"\x00"
-        if off == fhi.LAYER_SHAPE_ID_OFF: # 101 or 102
-            return bytes([102])
+        if off == fhi.LAYER_SHAPE_ID_OFF:
+            return bytes([self._shape_id])
         return b"\x00" * size
 
     def write(self, addr: int, data: bytes) -> int:
@@ -150,6 +151,20 @@ def test_inject_refuses_when_more_shapes_than_slots():
     result = inj.inject([{"type": "circle", "x": 0, "y": 0, "r": 5, "color": [1, 2, 3, 255]}] * 2, handle)
     assert not result.success
     assert "slot" in result.message.lower()
+
+
+def test_score_layer_honors_overridden_shape_ids():
+    # _score_layer must match against the SEEDED module globals (which a profile /
+    # .fd6_offsets.json override updates), not the baked 101/102 literals — else it
+    # rejects the very ids inject() writes under an override. Set the globals as
+    # _seed_module_offsets would, and restore them so other tests aren't polluted.
+    saved = (fhi.SHAPE_ID_ELLIPSE, fhi.SHAPE_ID_OTHER)
+    try:
+        fhi.SHAPE_ID_ELLIPSE, fhi.SHAPE_ID_OTHER = 200, 199
+        assert fhi._score_layer(FakeProc(shape_id=200), _LAYER_BASE) == 5  # overridden id accepted
+        assert fhi._score_layer(FakeProc(shape_id=102), _LAYER_BASE) == 4  # old baked id no longer scores
+    finally:
+        fhi.SHAPE_ID_ELLIPSE, fhi.SHAPE_ID_OTHER = saved
 
 
 def test_is_user_ptr_bounds():
