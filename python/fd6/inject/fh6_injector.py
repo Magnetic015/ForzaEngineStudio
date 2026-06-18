@@ -361,9 +361,12 @@ def _score_layer(proc: ProcessHandle, lptr: int) -> int:
     color = proc.try_read(lptr + LAYER_COLOR_OFF, 4)
     if color and len(color) == 4:
         score += 1
-    # Shape ID: must be a known FH6 shape id
+    # Shape ID: must be a known shape id. Match against the seeded module globals
+    # (not the baked 101/102 literals) so a profile / .fd6_offsets.json shape-id
+    # override is honored here too — otherwise the scorer would reject the very
+    # ids inject() writes, defeating the advertised override path.
     shape = proc.try_read(lptr + LAYER_SHAPE_ID_OFF, 1)
-    if shape and shape[0] in (101, 102):
+    if shape and shape[0] in (SHAPE_ID_ELLIPSE, SHAPE_ID_OTHER):
         score += 1
     # Mask: must be 0 or 1
     mask = proc.try_read(lptr + LAYER_MASK_OFF, 1)
