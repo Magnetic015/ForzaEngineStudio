@@ -1,11 +1,13 @@
 import { useRef, useState } from "react";
-import { Button, Toast } from "@douyinfe/semi-ui";
+import { Button, Modal, Toast } from "@douyinfe/semi-ui";
 import {
   isTauri,
   readImageDataUrl,
   aiProcessImage,
   startGeneration,
   stopGeneration,
+  injectLayers,
+  stopInjection,
   importJson,
   saveCroppedImage,
   revealInDir,
@@ -13,9 +15,10 @@ import {
   pickJsonFile,
   type Cand,
   type EngineEvent,
+  type InjectEvent,
 } from "./api/tauri";
 import { type ProgressState, type RmsPoint } from "./types";
-import { useEngineEvents } from "./hooks/useEngineEvents";
+import { useEngineEvents, useInjectEvents } from "./hooks/useEngineEvents";
 import { useSplitter } from "./hooks/useSplitter";
 import TopBar from "./components/TopBar";
 import CandidateStrip from "./components/CandidateStrip";
@@ -58,6 +61,29 @@ export default function App() {
   const currentGenRef = useRef(0);
   const [aiRunning, setAiRunning] = useState(false);
 
+  // In-game layer injection. `injectingRef` mirrors `injecting` synchronously so
+  // the async inject-event handler can tell a user-initiated stop (ignore the
+  // resulting `exit`) from a genuine crash — same rationale as runningRef.
+  const [injecting, setInjectingState] = useState(false);
+  const injectingRef = useRef(false);
+  const setInjecting = (on: boolean) => {
+    injectingRef.current = on;
+    setInjectingState(on);
+  };
+  // Path of the shape JSON eligible for injection: the latest completed render's
+  // saved JSON, or the most recently imported JSON ("" → nothing to inject).
+  const [injectJsonPath, setInjectJsonPath] = useState("");
+  // Live mirror of injectJsonPath so the confirm dialog's onOk can revalidate
+  // against the CURRENT design at click time (the closure captured a stale value
+  // if a reset/import/render happened while the dialog was open).
+  const injectJsonPathRef = useRef("");
+  injectJsonPathRef.current = injectJsonPath;
+  // Injection generation bookkeeping, mirroring the render gen: each inject takes
+  // the next id, publishes it before invoking, and the event handler drops events
+  // whose gen ≠ the live injection's; stop resets it to 0.
+  const injectGenCounterRef = useRef(0);
+  const currentInjectGenRef = useRef(0);
+
   // top-bar controls
   const [stopAt, setStopAt] = useState(3000);
   const [quality, setQuality] = useState(3); // 1 草稿 / 2 标准 / 3 精细 / 4 极致 (default 3 = 精细; measured clearly closer to the original than 2, 极致 is the one-click max for final exports)
@@ -96,10 +122,13 @@ export default function App() {
   const selectedCand = selectedIndex >= 0 && selectedIndex < candidates.length ? candidates[selectedIndex] : null;
   const currentRenderPath = selectedCand?.path ?? null;
   const hasTarget = selectedIndex >= 0;
-  const canStart = hasTarget && !running;
-  const sendBlocked = aiRunning || running || !hasTarget || !apiKey.trim() || !currentModel;
+  const canStart = hasTarget && !running && !injecting;
+  const sendBlocked = aiRunning || running || injecting || !hasTarget || !apiKey.trim() || !currentModel;
   const targetSrc = selectedCand?.src || "";
-  const canCrop = hasTarget && !running && !aiRunning && !!targetSrc;
+  const canCrop = hasTarget && !running && !aiRunning && !injecting && !!targetSrc;
+  // Inject is available once a design JSON exists (rendered or imported) and no
+  // render / injection is already in flight. Tauri-only (writes game memory).
+  const canInject = isTauri && !!injectJsonPath && !running && !injecting && !aiRunning;
 
   // ── candidate helpers ───────────────────────────────────────────────────────
   // Label for a freshly picked local image: 原图 / 原图 2 / 原图 3 …
@@ -116,13 +145,13 @@ export default function App() {
   };
   // Block target switches while an AI edit or a render is in flight (mirrors pickImage's guard).
   const selectCandidate = (i: number) => {
-    if (running || aiRunning) return;
+    if (running || aiRunning || injecting) return;
     setSelectedIndex(i);
   };
 
   // ── actions ─────────────────────────────────────────────────────────────────
   async function pickImage() {
-    if (running || aiRunning) return;
+    if (running || aiRunning || injecting) return;
     if (isTauri) {
       const file = await pickImageFile();
       if (!file) return;
@@ -185,7 +214,7 @@ export default function App() {
   }
 
   async function start() {
-    if (running) return;
+    if (running || injecting) return;
     const src = currentRenderPath;
     if (!isTauri || !src) {
       setStatus("纯前端预览模式：渲染需在桌面应用内运行。");
@@ -205,6 +234,7 @@ export default function App() {
     currentGenRef.current = gen;
     setRunning(true);
     setSavedJsonPath(""); // previous run's save dir no longer applies
+    setInjectJsonPath(""); // the in-progress render supersedes the old injectable design
     setStatus(
       `正在启动引擎…（目标图：${selectedCand?.label || ""}，画布 ${safeW}×${safeH}${assist ? " · 模型协助" : ""}）`
     );
@@ -254,8 +284,83 @@ export default function App() {
     }
   }
 
+  // Inject the current design into the running game. Writing to a live game's
+  // process memory is a risky, hard-to-undo action (ban risk; needs the right
+  // template loaded), so confirm prerequisites before spawning the sidecar.
+  function inject() {
+    if (running || injecting) return;
+    if (!isTauri || !injectJsonPath) {
+      setStatus("纯前端预览模式：注入图层需在桌面应用内运行。");
+      return;
+    }
+    // Snapshot the design at dialog-open time; onOk revalidates against the live
+    // value so a reset/import/render that happened while the dialog was open
+    // can't inject a stale (or just-superseded) path.
+    const jsonPath = injectJsonPath;
+    Modal.confirm({
+      title: "注入图层到游戏",
+      okText: "开始注入",
+      cancelText: "取消",
+      content: (
+        <div style={{ lineHeight: 1.6 }}>
+          <p>即将把当前设计的形状写入正在运行的 Forza（FH6）进程内存。请先确认：</p>
+          <ol style={{ paddingLeft: 18, margin: "6px 0" }}>
+            <li>游戏已运行，并已进入「贴纸组（Vinyl Group）」编辑器；</li>
+            <li>已加载一个全新、未改动的球体模板，且球体数量 ≥ 设计形状数（如 500 / 1500 / 3000）；</li>
+            <li>若提示无法附加进程，请以管理员身份重新启动本应用。</li>
+          </ol>
+          <p style={{ color: "var(--semi-color-warning)" }}>
+            风险提示：写入运行中游戏内存可能被判定为违反服务条款而导致封号。请先在可丢弃的贴纸组上测试。
+          </p>
+        </div>
+      ),
+      onOk: async () => {
+        // Revalidate live state — the dialog may have sat open while things changed.
+        if (runningRef.current || injectingRef.current || !isTauri || injectJsonPathRef.current !== jsonPath) {
+          setStatus("设计或状态已变化，已取消本次注入。请重新发起。");
+          return;
+        }
+        // Assign and publish the generation BEFORE invoking, so events the Rust
+        // stdout thread forwards during startup already carry the live gen.
+        const gen = injectGenCounterRef.current + 1;
+        injectGenCounterRef.current = gen;
+        currentInjectGenRef.current = gen;
+        setInjecting(true);
+        setStatus("正在启动注入…（请勿在扫描期间点击游戏外的窗口）");
+        try {
+          await injectLayers({ jsonPath, profile: "fh6", generation: gen });
+        } catch (e) {
+          currentInjectGenRef.current = 0;
+          setInjecting(false);
+          setStatus("注入启动失败：" + e);
+        }
+      },
+    });
+  }
+
+  // Terminate the in-flight injection. Flip `injecting` off first (via the ref)
+  // and invalidate the generation so the kill-induced `exit` (and any same-gen
+  // events flushed just before the kill) are dropped instead of read as a crash.
+  async function stopInject() {
+    if (!injecting) return;
+    const stoppedGen = currentInjectGenRef.current; // remember in case the kill fails
+    setInjecting(false);
+    currentInjectGenRef.current = 0;
+    setStatus("正在终止注入…");
+    try {
+      await stopInjection();
+      setStatus("已终止注入。");
+    } catch (e) {
+      // Kill failed — the sidecar is likely still injecting. Restore both
+      // injecting and the generation so its ongoing events are honoured again.
+      currentInjectGenRef.current = stoppedGen;
+      setInjecting(true);
+      setStatus("终止注入失败，注入可能仍在运行：" + e);
+    }
+  }
+
   async function handleImportJson() {
-    if (running) return;
+    if (running || injecting) return;
     if (!isTauri) {
       setStatus("纯前端预览模式：导入 JSON 需在桌面应用内运行。");
       return;
@@ -267,6 +372,8 @@ export default function App() {
     try {
       const dataUrl = await importJson(file);
       setPreviewSrc(dataUrl);
+      // An imported design is injectable just like a freshly rendered one.
+      setInjectJsonPath(file);
       const name = file.replace(/\\/g, "/").split("/").pop() || file;
       setStatus(`已导入并在预览区渲染 JSON：${name}`);
     } catch (e) {
@@ -276,11 +383,12 @@ export default function App() {
 
   // Reset only the render output (preview image, progress, status); inputs stay.
   function resetPreview() {
-    if (running) return;
+    if (running || injecting) return;
     setPreviewSrc("");
     setRmsHistory([]);
     setProgress({ n: 0, total: 0, rms: 0 });
     setSavedJsonPath("");
+    setInjectJsonPath("");
     setStatus(READY_STATUS);
   }
 
@@ -359,8 +467,12 @@ export default function App() {
         if (p.png) setPreviewSrc("data:image/png;base64," + p.png);
         setProgress({ n: p.shape_count, total: p.total ?? p.shape_count, rms: p.rms });
         pushRms(p.shape_count, p.rms);
-        // Only a real saved path (not a "(save failed: …)" marker) enables 打开保存目录.
-        if (p.json_path && !p.json_path.startsWith("(")) setSavedJsonPath(p.json_path);
+        // Only a real saved path (not a "(save failed: …)" marker) enables 打开保存目录
+        // and makes the finished design injectable.
+        if (p.json_path && !p.json_path.startsWith("(")) {
+          setSavedJsonPath(p.json_path);
+          setInjectJsonPath(p.json_path);
+        }
         setStatus(
           `完成！共 ${p.shape_count} 个形状，最终 RMS ${typeof p.rms === "number" ? p.rms.toFixed(2) : p.rms} · JSON 已保存：${p.json_path}`
         );
@@ -378,6 +490,54 @@ export default function App() {
         break;
       case "log":
         console.log("[sidecar]", p.message);
+        break;
+    }
+  });
+
+  // ── injection event stream ────────────────────────────────────────────────────
+  useInjectEvents((p: InjectEvent) => {
+    // Drop events from a superseded/stopped injection: after a stop (or a quick
+    // stop→restart), the old sidecar's queued stdout must not touch the live run.
+    // `log` is gen-less and side-effect-free, so let it through.
+    if (p.type !== "log" && p.gen !== undefined && p.gen !== currentInjectGenRef.current) return;
+    switch (p.type) {
+      case "scan":
+        setStatus(`正在扫描游戏内存定位贴纸组…（区域 ${p.scanned}/${p.total} · 命中 ${p.hits}）`);
+        break;
+      case "write":
+        setStatus(`正在写入图层…（${p.written}/${p.total}）`);
+        break;
+      case "status":
+        // Injector phase guidance — surface as-is, but escalate warnings/errors
+        // to a Toast (the RTTI-fallback notice warns not to click for 2–5 min).
+        setStatus("注入：" + p.message);
+        if (p.severity === "warning") Toast.warning({ content: p.message, duration: 8 });
+        else if (p.severity === "error") Toast.error({ content: p.message, duration: 8 });
+        break;
+      case "done":
+        setInjecting(false);
+        if (p.success) {
+          setStatus(`注入成功：已写入 ${p.shapes_written ?? 0} 个图层。${p.message ?? ""}`);
+        } else {
+          setStatus("注入未完成：" + (p.message ?? ""));
+          Toast.warning({ content: p.message ?? "注入未完成", duration: 6 });
+        }
+        break;
+      case "error":
+        setInjecting(false);
+        setStatus("注入失败：" + p.message);
+        Toast.error({ content: p.message, duration: 6 });
+        break;
+      case "exit":
+        // Only surface an unexpected exit when we still believe an injection is
+        // live — a user-initiated stop flips `injecting` off first.
+        if (injectingRef.current) {
+          setStatus("注入进程异常退出（code " + p.code + "）。请查看日志。");
+          setInjecting(false);
+        }
+        break;
+      case "log":
+        console.log("[inject]", p.message);
         break;
     }
   });
@@ -427,7 +587,7 @@ export default function App() {
               selectedIndex={selectedIndex}
               onSelect={selectCandidate}
               onPick={pickImage}
-              disabled={running || aiRunning}
+              disabled={running || aiRunning || injecting}
             />
             <figure className="target-fig">
               <div className="target">
@@ -486,6 +646,10 @@ export default function App() {
             onStop={stop}
             onImportJson={handleImportJson}
             onResetPreview={resetPreview}
+            injecting={injecting}
+            canInject={canInject}
+            onInject={inject}
+            onStopInject={stopInject}
           />
         </section>
       </div>
