@@ -440,21 +440,13 @@ def locate_livery_group(
     candidates = 0
     perfect: list[tuple[int, int]] = []  # (group_addr, table_addr) all 16/16
     for i, r in enumerate(regions):
-        data = proc.try_read(r.base, r.size)
-        if data is None:
-            if progress_cb: progress_cb(i + 1, total, candidates)
-            continue
-        start = 0
-        while True:
-            pos = data.find(pattern, start)
-            if pos < 0:
-                break
-            start = pos + 1
+        # Stream the region in overlapping chunks rather than buffering the
+        # whole (possibly multi-GB) heap into one bytes object before scanning.
+        for count_addr in proc.iter_pattern_matches(r.base, r.size, pattern):
             candidates += 1
             if candidates > max_candidates:
                 if progress_cb: progress_cb(i + 1, total, candidates)
                 return _pick_best_perfect(proc, perfect, layer_count)
-            count_addr = r.base + pos
             group_addr = count_addr - COUNT_OFF
             if group_addr < r.base:
                 continue
@@ -821,6 +813,7 @@ class FH6Injector(Injector):
         written = 0
         bytes_total = 0
         skipped = 0
+        unsupported = 0
         # Per-type counter — surfaced in the final result message so users can
         # see at a glance whether their checked rect / rotated_rect actually
         # made it into the JSON, vs. losing every fitness contest to ellipses.
@@ -837,6 +830,17 @@ class FH6Injector(Injector):
                 continue
             shape_type = sd.get("type", "rotated_ellipse")
             is_ellipse = "ellipse" in shape_type or shape_type == "circle"
+            is_rect = "rect" in shape_type or "square" in shape_type
+            # The game's layer record only encodes ellipse-family and quad
+            # ("other") shapes. Anything else — notably `triangle`, which carries
+            # x1/y1/x2/... instead of a center + size — has no faithful mapping
+            # and would otherwise fall through as a tiny `other` blob at (0, 0),
+            # silently corrupting the result while reporting success. Reject it.
+            if not is_ellipse and not is_rect:
+                unsupported += 1
+                if progress_cb:
+                    progress_cb(written, n)
+                continue
             scale_div = (
                 self.profile.scale_divisor_ellipse if is_ellipse
                 else self.profile.scale_divisor_other
@@ -913,6 +917,22 @@ class FH6Injector(Injector):
                     "shifted in this game build — re-probe and set them in "
                     ".fd6_offsets.json."
                 )
+        if unsupported:
+            msg += (
+                f" Skipped {unsupported} unsupported shape(s) (e.g. triangle) that "
+                f"the game's layer format can't represent."
+            )
+        # Faithful to FD6: layers past the written count keep whatever the
+        # template already held. Surface it so a smaller design injected into a
+        # larger template isn't mistaken for a clean result — the leftover
+        # template spheres/old shapes are still in the vinyl.
+        leftover = len(layer_addrs) - n
+        if leftover > 0:
+            msg += (
+                f" Note: {leftover} of the template's {len(layer_addrs)} slots were "
+                f"left untouched and still hold their previous shapes — load a template "
+                f"closer to {n} slots, or clear the extras in-game, for a clean result."
+            )
         msg += " " + self.build_status()
         return InjectResult(
             success=written > 0,
