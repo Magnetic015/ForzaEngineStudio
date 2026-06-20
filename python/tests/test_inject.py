@@ -167,6 +167,63 @@ def test_score_layer_honors_overridden_shape_ids():
         fhi.SHAPE_ID_ELLIPSE, fhi.SHAPE_ID_OTHER = saved
 
 
+def test_inject_rejects_unsupported_triangle():
+    # A triangle carries x1/y1/x2/... with no center/size, so the game's layer
+    # record can't represent it. It must be skipped (not written as a tiny blob
+    # at (0,0)), and the result must say so rather than reporting a clean write.
+    inj = FH6Injector(profile=get_profile("fh6"))
+    inj._proc = FakeProc()
+    handle = VinylGroupHandle(layer_count=1, meta={"layer_addrs": [_LAYER_BASE]})
+    tri = {"type": "triangle", "x1": 0, "y1": 0, "x2": 1, "y2": 1,
+           "x3": 2, "y3": 0, "color": [1, 2, 3, 255]}
+    result = inj.inject([tri], handle)
+    assert not result.success
+    assert result.shapes_written == 0
+    assert not inj._proc.writes, "a triangle must not be written to any layer slot"
+    assert "unsupported" in result.message.lower()
+
+
+def test_inject_warns_when_template_has_extra_slots():
+    # Faithful to FD6, leftover slots keep their prior shapes. Injecting a
+    # smaller design into a larger template must flag that the extras are stale
+    # instead of letting the success message imply a clean vinyl.
+    inj = FH6Injector(profile=get_profile("fh6"))
+    inj._proc = FakeProc()
+    handle = VinylGroupHandle(layer_count=2, meta={"layer_addrs": [_LAYER_BASE, _LAYER_BASE + 0x100]})
+    circle = {"type": "circle", "x": 0, "y": 0, "r": 5, "color": [1, 2, 3, 255]}
+    result = inj.inject([circle], handle)
+    assert result.success and result.shapes_written == 1
+    assert "untouched" in result.message.lower()
+    assert "1 of the template" in result.message
+
+
+def test_iter_pattern_matches_streams_without_duplicates():
+    # The chunked scanner must find a pattern that straddles a chunk boundary,
+    # yield each match exactly once (no double-count from the re-read overlap),
+    # and honor the alignment filter — the streaming replacement for the old
+    # "buffer the whole multi-GB region, then .find()" path.
+    from fd6.inject.win_process import ProcessHandle
+
+    class _StreamProc(ProcessHandle):
+        def __init__(self, data: bytes, chunk: int) -> None:
+            self.handle = 1  # truthy stand-in; no real Win32 handle needed
+            self._data = data
+            self._TRY_READ_CHUNK = chunk
+
+        def _try_read_chunk(self, addr: int, size: int) -> bytes | None:
+            seg = self._data[addr:addr + size]
+            return seg if seg else None
+
+    pat = b"\xAA\xBB"
+    data = bytearray(20)
+    for off in (2, 7, 12):       # 7 straddles the chunk-8 boundary
+        data[off:off + 2] = pat
+    proc = _StreamProc(bytes(data), chunk=8)
+    assert list(proc.iter_pattern_matches(0, len(data), pat)) == [2, 7, 12]
+    # alignment=4 keeps only offsets divisible by 4.
+    assert list(proc.iter_pattern_matches(0, len(data), pat, alignment=4)) == [12]
+
+
 def test_is_user_ptr_bounds():
     assert not _is_user_ptr(0)
     assert not _is_user_ptr(0x1000)               # below the user-space floor
