@@ -117,21 +117,14 @@ def _find_pattern_in_image(proc: ProcessHandle, pattern: bytes,
     image_regions = [r for r in proc.enumerate_regions() if r.is_image and r.readable]
     total = len(image_regions) or 1
     for i, r in enumerate(image_regions):
-        data = proc.try_read(r.base, r.size)
-        if data is not None:
-            start = 0
-            while True:
-                pos = data.find(pattern, start)
-                if pos < 0:
-                    break
-                addr = r.base + pos
-                if alignment <= 1 or addr % alignment == 0:
-                    matches.append(addr)
-                    if stop_after is not None and len(matches) >= stop_after:
-                        if progress_cb:
-                            progress_cb(i + 1, total, len(matches))
-                        return matches
-                start = pos + 1
+        # Stream the region rather than buffering the whole code section before
+        # scanning; alignment filtering happens inside the generator.
+        for addr in proc.iter_pattern_matches(r.base, r.size, pattern, alignment=alignment):
+            matches.append(addr)
+            if stop_after is not None and len(matches) >= stop_after:
+                if progress_cb:
+                    progress_cb(i + 1, total, len(matches))
+                return matches
         if progress_cb:
             progress_cb(i + 1, total, len(matches))
     return matches
@@ -246,20 +239,13 @@ def find_livery_group_candidates(
     seen_groups: set[int] = set()
     total = len(private_regions)
     for ri, region in enumerate(private_regions):
-        data = proc.try_read(region.base, region.size)
-        if data is None:
-            if progress_cb:
-                progress_cb(ri + 1, total, len(candidates))
-            continue
         for vtable in vtables:
             pat = struct.pack('<Q', vtable)
-            start = 0
-            while True:
-                pos = data.find(pat, start)
-                if pos < 0:
-                    break
-                start = pos + 8
-                group_addr = region.base + pos
+            # Stream the region per vtable rather than buffering the whole
+            # (possibly multi-GB) heap into one bytes object. vtable counts are
+            # tiny (usually 1–3), so the extra passes are cheap next to the OOM
+            # risk of materializing a multi-GB region.
+            for group_addr in proc.iter_pattern_matches(region.base, region.size, pat):
                 if group_addr in seen_groups:
                     continue
                 # Read count + table pointer at the profile-defined offsets.

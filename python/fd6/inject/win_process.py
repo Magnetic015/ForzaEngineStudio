@@ -231,6 +231,54 @@ class ProcessHandle:
             return None
         return bytes(buf[:n.value])
 
+    def iter_pattern_matches(self, base: int, size: int, pattern: bytes,
+                             alignment: int = 1):
+        """Yield absolute addresses where `pattern` occurs within [base, base+size).
+
+        Streams the region one 256 MiB chunk at a time so a multi-GB committed
+        heap is never materialized whole — the previous `try_read(base, size)`
+        then `data.find()` path could allocate several GB and OOM/stall on the
+        large FH heaps before a single match was tested. Memory use here is
+        bounded by one chunk regardless of region size.
+
+        Consecutive chunks overlap by `len(pattern) - 1` bytes so a pattern that
+        straddles a chunk boundary is still found; each match is yielded exactly
+        once (the overlap tail is only searched as the head of the next chunk).
+        A page that disappears mid-region ends the scan for that region, matching
+        try_read's partial-read semantics during live scanning.
+        """
+        if self.handle is None:
+            raise RuntimeError("Process handle not open")
+        plen = len(pattern)
+        if plen == 0 or size < plen:
+            return
+        overlap = plen - 1
+        cursor = base
+        end = base + size
+        while cursor < end:
+            take = min(self._TRY_READ_CHUNK, end - cursor)
+            chunk = self._try_read_chunk(cursor, take)
+            if chunk is None:
+                return
+            # A short read means a page vanished mid-region; scan what we got
+            # then stop. The final chunk owns its full length; earlier chunks
+            # cede their last `overlap` bytes to the next chunk's head so a
+            # straddling match isn't yielded twice.
+            is_last = (cursor + take >= end) or (len(chunk) < take)
+            limit = len(chunk) if is_last else len(chunk) - overlap
+            start = 0
+            while True:
+                pos = chunk.find(pattern, start)
+                if pos < 0 or pos >= limit:
+                    break
+                addr = cursor + pos
+                if alignment <= 1 or addr % alignment == 0:
+                    yield addr
+                start = pos + 1
+            if is_last:
+                return
+            cursor += take - overlap
+
     def enumerate_regions(self) -> list[MemoryRegion]:
         """Walk the process's address space via VirtualQueryEx. Returns committed regions."""
         if self.handle is None:
