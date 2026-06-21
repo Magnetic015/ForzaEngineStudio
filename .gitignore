@@ -41,6 +41,8 @@ __pycache__/
 
 # Local dev workspace (eval harnesses, scratch notes) — never pushed
 docs/
+# Project-level Claude instructions / memory — local only
+CLAUDE.md
 
 # Secrets & credentials — never commit API keys, tokens, certs, or private keys
 .env

@@ -30,7 +30,7 @@ datas = []
 binaries = []
 # The dispatcher imports these lazily by name, so PyInstaller can't see them by
 # static analysis — declare them (plus the whole vendored engine package).
-hiddenimports = ["sidecar", "image_process", "render_json"]
+hiddenimports = ["sidecar", "image_process", "render_json", "inject_sidecar"]
 hiddenimports += collect_submodules("fd6")
 
 # Bundle pip (+ its vendored deps and metadata) so gpu.py's on-demand pyopencl
