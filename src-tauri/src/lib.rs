@@ -14,6 +14,14 @@ struct EngineState {
     pid: Arc<Mutex<Option<u32>>>,
 }
 
+/// Tracks the currently running injection sidecar so `stop_injection` can kill
+/// it (separate slot from the render sidecar — they never run at once in the UI,
+/// but keeping the pids apart keeps the render reaper/exit logic independent).
+#[derive(Default)]
+struct InjectState {
+    pid: Arc<Mutex<Option<u32>>>,
+}
+
 /// Locate the vendored `python/` dir (sibling of `src-tauri/`) for a DEV run.
 /// Uses CARGO_MANIFEST_DIR — valid under `tauri dev`. A packaged release instead
 /// spawns the frozen `fes-engine` exe shipped as a resource (see `engine_command`).
@@ -284,6 +292,155 @@ fn kill_pid(pid: u32) -> Result<(), String> {
     }
 }
 
+/// Inject a rendered shape design into a running Forza game process. Spawns the
+/// Python injection sidecar and streams its line-JSON events to the frontend as
+/// `inject-event` (a channel separate from the render `engine-event` stream).
+/// Returns immediately; scan/write progress and the final result arrive
+/// asynchronously via events. `profile` is the game profile key (e.g. "fh6").
+#[tauri::command]
+fn inject_layers(
+    app: AppHandle,
+    state: tauri::State<'_, InjectState>,
+    json_path: String,
+    profile: String,
+    generation: u64,
+) -> Result<(), String> {
+    let mut cmd = engine_command(&app, "inject", "inject_sidecar.py")?;
+    cmd.arg("--json").arg(&json_path)
+        .arg("--profile").arg(&profile)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    // Single-flight: reserve the pid slot under the lock BEFORE spawning so a
+    // second invoke (a double-confirmed dialog, or a render starting underneath
+    // an open inject dialog) can't launch a second sidecar that writes game
+    // memory concurrently and orphans the first (untracked → unkillable by stop
+    // and the exit hook). Spawning while holding the lock keeps the check-and-set
+    // atomic against a racing invoke on another command thread.
+    let mut child = {
+        let mut slot = state
+            .pid
+            .lock()
+            .map_err(|_| "injection state lock poisoned".to_string())?;
+        if slot.is_some() {
+            return Err("an injection is already running".to_string());
+        }
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to start injection sidecar: {e}"))?;
+        *slot = Some(child.id());
+        child
+    };
+
+    // If pipe setup fails after we reserved the slot, kill the child and release
+    // the slot — otherwise the UI is wedged "injecting" with no live process.
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait(); // reap so the child's OS handle isn't leaked
+            if let Ok(mut slot) = state.pid.lock() {
+                *slot = None;
+            }
+            return Err("no stdout pipe".to_string());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait(); // reap so the child's OS handle isn't leaked
+            if let Ok(mut slot) = state.pid.lock() {
+                *slot = None;
+            }
+            return Err("no stderr pipe".to_string());
+        }
+    };
+
+    // stdout: one JSON event per line -> tag with the caller's `generation` (so a
+    // stopped injection's late events can't touch a newly started one) and
+    // forward to the frontend as `inject-event`.
+    let app_out = app.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(l) if !l.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&l) {
+                    Ok(mut v) => {
+                        if let Some(obj) = v.as_object_mut() {
+                            obj.insert("gen".into(), serde_json::json!(generation));
+                        }
+                        let _ = app_out.emit("inject-event", v);
+                    }
+                    Err(_) => {
+                        let _ = app_out
+                            .emit("inject-event", serde_json::json!({"type":"log","message": l}));
+                    }
+                },
+                _ => {}
+            }
+        }
+    });
+
+    // stderr: surface Python tracebacks/warnings as log events.
+    let app_err = app.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            if !line.trim().is_empty() {
+                let _ = app_err
+                    .emit("inject-event", serde_json::json!({"type":"log","message": line}));
+            }
+        }
+    });
+
+    // Reap the child; clear our pid slot and report abnormal exit (a crash or a
+    // user-initiated stop) so the UI can unstick itself even if the sidecar died
+    // before emitting a terminal `done`/`error` event.
+    let app_wait = app.clone();
+    let pid_slot = state.pid.clone();
+    std::thread::spawn(move || {
+        let my_pid = child.id();
+        let status = child.wait();
+        if let Ok(mut g) = pid_slot.lock() {
+            if *g == Some(my_pid) {
+                *g = None;
+            }
+        }
+        if let Ok(status) = status {
+            if !status.success() {
+                let _ = app_wait.emit(
+                    "inject-event",
+                    serde_json::json!({"type":"exit","code": status.code(),"gen": generation}),
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Stop the in-flight injection: terminate the sidecar process tree by pid. The
+/// reaper thread observes the exit and clears the pid slot; the frontend resets
+/// its own UI optimistically, so the resulting `exit` event is ignored.
+#[tauri::command]
+fn stop_injection(state: tauri::State<'_, InjectState>) -> Result<(), String> {
+    let pid = *state
+        .pid
+        .lock()
+        .map_err(|_| "injection state lock poisoned".to_string())?;
+    match pid {
+        Some(pid) => kill_pid(pid),
+        None => Ok(()),
+    }
+}
+
 /// Run the AI image-edit sidecar and return the edited image path.
 ///
 /// The sidecar call is a synchronous process spawn + wait that can take 10–40s
@@ -494,7 +651,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(EngineState::default())
-        .invoke_handler(tauri::generate_handler![start_generation, stop_generation, ai_process_image, read_image_data_url, import_json, save_cropped_image, reveal_in_dir])
+        .manage(InjectState::default())
+        .invoke_handler(tauri::generate_handler![start_generation, stop_generation, inject_layers, stop_injection, ai_process_image, read_image_data_url, import_json, save_cropped_image, reveal_in_dir])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
@@ -504,9 +662,19 @@ pub fn run() {
             // no UI left to surface an error to. `ExitRequested` fires when the
             // last window closes; `Exit` is the final stop for every exit path.
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                let pid = *app_handle.state::<EngineState>().pid.lock().unwrap();
-                if let Some(pid) = pid {
-                    let _ = kill_pid(pid);
+                // Best-effort kill of both sidecars so their GPU context / game
+                // OpenProcess handle is released instead of leaking as an orphan.
+                // Use if-let on the lock: a poisoned mutex must not panic the
+                // shutdown path (that would skip killing the other sidecar too).
+                if let Ok(g) = app_handle.state::<EngineState>().pid.lock() {
+                    if let Some(pid) = *g {
+                        let _ = kill_pid(pid);
+                    }
+                }
+                if let Ok(g) = app_handle.state::<InjectState>().pid.lock() {
+                    if let Some(pid) = *g {
+                        let _ = kill_pid(pid);
+                    }
                 }
             }
             _ => {}
