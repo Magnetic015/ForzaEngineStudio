@@ -1,6 +1,10 @@
 """AI image-preprocess sidecar — edit the selected local image via a third-party
 image model on an OpenAI-compatible gateway, save the result next to the source.
 
+The gateway base URL is supplied at runtime via the FES_AI_BASE_URL environment
+variable (or the --base-url flag); it is intentionally not hardcoded so no
+private endpoint is baked into the source.
+
 The gateway exposes image models through TWO different shapes, so this sidecar
 routes per model:
 
@@ -28,6 +32,7 @@ import argparse
 import base64
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -214,7 +219,9 @@ def main() -> int:
     ap.add_argument("--api-key", required=True)
     ap.add_argument("--prompt", default="")
     ap.add_argument("--model", default="plus/gpt-image-2")
-    ap.add_argument("--base-url", default="https://your-gateway.example/v1")
+    # Gateway base URL: never hardcode a private endpoint. Read it from the
+    # FES_AI_BASE_URL env var, overridable by an explicit --base-url flag.
+    ap.add_argument("--base-url", default=os.environ.get("FES_AI_BASE_URL", ""))
     ap.add_argument("--out", default="")
     # "render-optimize" asks the model to flatten the image for fewer-layer,
     # higher-fidelity shape rendering. When set, it supplies/prefixes the prompt.
@@ -230,6 +237,10 @@ def main() -> int:
         emit({"type": "error", "message": "no prompt: pass --prompt or --preset render-optimize"})
         return 1
     args.prompt = prompt
+
+    if not (args.base_url or "").strip():
+        emit({"type": "error", "message": "no gateway base URL: set the FES_AI_BASE_URL environment variable or pass --base-url (an OpenAI-compatible endpoint, e.g. https://your-gateway.example/v1)"})
+        return 1
 
     src = Path(args.image)
     if not src.exists():
